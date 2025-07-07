@@ -122,3 +122,4 @@ auto_JY_sql/
 *   **API Key**: 保护好您的 LLM API Key，不要将其泄露。
 *   **模型**: `generate_sql.py` 和 `table_info_spider.py` 中的 LLM 模型配置需要与您使用的 LLM 服务兼容。
 *   **调试**: 如果遇到问题，可以查看 Gradio 界面中的“执行日志”或命令行输出，以获取更多信息。`table_info_spider.py` 在失败时会保存调试用的 HTML 文件。
+*   **聚源常用表**: `QT_TradingDayNew, SecuMain, HK_SecuMain, MF_FundArchives, MF_FundType, MF_Transformation, MF_KeyStockPortfolio, MF_QDIIPortfolioDetail, MF_BondPortifolioDetail, MF_QDIIPortfolioDetail, MF_FundPortifolioDetail, MF_QDIIPortfolioDetail, MF_BalanceSheetNew, MF_BondPortifolioStru, MF_AssetAllocationNew, MF_StockPortfolioDetail, LC_DIndicesForValuation` 
