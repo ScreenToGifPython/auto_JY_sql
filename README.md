@@ -97,6 +97,7 @@
     *   点击“**生成SQL**”。
     *   生成的 SQL 语句将显示在“执行日志”区域。
     ![表信息爬虫界面](pics/full_sql.png)
+    ![表信息爬虫界面](pics/rag_sql.png)
     ![表信息爬虫界面](pics/sql_select_check.png)
 
 ## 项目结构
