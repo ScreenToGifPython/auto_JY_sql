@@ -1,0 +1,7 @@
+*.html
+*.json
+*.bin
+.idea/
+*.iml
+*.ipr
+*.iws
