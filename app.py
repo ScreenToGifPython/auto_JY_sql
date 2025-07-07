@@ -1,3 +1,10 @@
+# -*- encoding: utf-8 -*-
+"""
+@File: app.py
+@Modify Time: 2025/7/7
+@Author: KevinChen
+@Descriptions: 本脚本使用Gradio构建了用户友好型Web界面, 以便用户可以简单的使用本框架的三大功能: 数据爬取, 信息向量化, SQL生成
+"""
 import gradio as gr
 import subprocess
 import os

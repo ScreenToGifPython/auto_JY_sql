@@ -1,3 +1,10 @@
+"""
+@File: app.py
+@Modify Time: 2025/7/7
+@Author: KevinChen
+@Descriptions: 用户用自然语言提供他们的查询需求（例如：“查询2023年以来所有股票的最高价”），
+选择目标SQL方言（MySQL或Oracle），并选择一种生成模式 (RAG或完整上下文)。
+"""
 import faiss, json, os, numpy as np
 import argparse
 from sentence_transformers import SentenceTransformer
