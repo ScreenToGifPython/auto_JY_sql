@@ -36,7 +36,7 @@
 
 1.  **克隆项目** (如果尚未克隆):
     ```bash
-    git clone <项目仓库地址>
+    git clone https://github.com/ScreenToGifPython/auto_JY_sql.git
     cd auto_JY_sql
     ```
 
