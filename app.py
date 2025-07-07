@@ -265,7 +265,6 @@ with gr.Blocks(title="恒生聚源 AutoSQLTools", theme=gr.themes.Soft()) as dem
         outputs=vectorize_log
     )
 
-
     # SQL生成页面
     def toggle_rag_options(mode):
         return gr.update(visible=mode == "RAG模式")
