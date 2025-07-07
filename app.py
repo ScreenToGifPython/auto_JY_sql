@@ -67,9 +67,16 @@ def run_script_and_stream_output(full_command):
 
 def spider_tab_logic(table_names_str, api_key, base_url, model_name, login_wait_time):
     """表信息爬虫页面的逻辑"""
-    if not table_names_str:
-        yield "错误: 表名不能为空。"
-        return
+    required_fields = {
+        "表名": table_names_str,
+        "API Key": api_key,
+        "Base URL": base_url,
+        "Model Name": model_name
+    }
+    for field_name, value in required_fields.items():
+        if not value:
+            yield f"错误: {field_name} 不能为空。"
+            return
 
     # 支持中英文逗号, 并去除空白
     table_list = [name.strip() for name in re.split('[,，]', table_names_str) if name.strip()]
@@ -102,9 +109,19 @@ def vectorize_tab_logic(model_name):
 
 def sql_gen_tab_logic(api_key, base_url, model_name, mode, rag_model, top_k, sql_type, query):
     """大模型生成SQL页面的逻辑"""
-    if not query:
-        yield "错误: 查询内容不能为空。"
-        return
+    required_fields = {
+        "API Key": api_key,
+        "Base URL": base_url,
+        "Model Name": model_name,
+        "查询内容": query
+    }
+    if mode == "RAG模式":
+        required_fields["RAG嵌入模型"] = rag_model
+
+    for field_name, value in required_fields.items():
+        if not value:
+            yield f"错误: {field_name} 不能为空。"
+            return
 
     command = [
         "python", "-u", os.path.join(SCRIPT_DIR, "generate_sql.py"),
@@ -146,7 +163,7 @@ def save_and_run_sql_gen(api_key, base_url, model_name, mode, rag_model, top_k, 
         "llm_api_key": api_key,
         "llm_base_url": base_url,
         "llm_model_name": model_name,
-        "embedding_model": rag_model # 保存RAG模式下的嵌入模型
+        "embedding_model": rag_model  # 保存RAG模式下的嵌入模型
     }
     save_config(config)
 
@@ -156,8 +173,8 @@ def save_and_run_sql_gen(api_key, base_url, model_name, mode, rag_model, top_k, 
 
 def save_and_run_vectorize(model_name):
     """先保存配置，然后执行矢量化脚本"""
-    config = load_config() # 加载现有配置
-    config["embedding_model"] = model_name # 更新嵌入模型
+    config = load_config()  # 加载现有配置
+    config["embedding_model"] = model_name  # 更新嵌入模型
     save_config(config)
 
     yield from vectorize_tab_logic(model_name)
