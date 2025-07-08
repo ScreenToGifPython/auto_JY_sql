@@ -292,4 +292,8 @@ with gr.Blocks(title="恒生聚源 AutoSQLTools", theme=gr.themes.Soft()) as dem
     )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(
+        server_name="0.0.0.0",  # 允许局域网访问
+        server_port=7860,  # 可选：指定端口（默认7860）
+        share=False  # 是否生成公网链接（False表示仅局域网）
+    )
