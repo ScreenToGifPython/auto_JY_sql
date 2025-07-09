@@ -13,6 +13,7 @@ except ImportError:
     print("请通过 'pip install sqlglot' 命令安装。")
     exit(1)
 
+
 def extract_data_to_json(csv_file_path, output_json_path):
     """
     从CSV文件中提取'id', 'req_url', 和 'db_sql'列的内容，并将其保存为JSON文件。
@@ -41,6 +42,7 @@ def extract_data_to_json(csv_file_path, output_json_path):
     except Exception as e:
         print(f"处理文件时发生错误: {e}")
         print(traceback.format_exc())
+
 
 def analyze_sql_relationships(input_json_path, output_json_path, dialect="oracle"):
     """
@@ -90,12 +92,12 @@ def analyze_sql_relationships(input_json_path, output_json_path, dialect="oracle
                 # 列名统一大写
                 l_col = eq.left.name.upper()
                 r_col = eq.right.name.upper()
-                op = "="                                   # EQ 节点恒为等号
+                op = "="  # EQ 节点恒为等号
 
                 # 按字典序交换，确保 A=B 与 B=A 只保留一条
                 if (l_table, l_col) > (r_table, r_col):
                     l_table, r_table = r_table, l_table
-                    l_col,   r_col   = r_col,   l_col
+                    l_col, r_col = r_col, l_col
 
                 canonical = f"{l_table}.{l_col} {op} {r_table}.{r_col}"
                 table_relationships[l_table][r_table].add(canonical)
@@ -127,7 +129,8 @@ if __name__ == '__main__':
     parser_analyze = subparsers.add_parser('analyze', help='从JSON文件分析SQL表关系。')
     parser_analyze.add_argument("input_json", help="包含SQL查询的输入JSON文件。")
     parser_analyze.add_argument("output_json", help="用于保存表关系图的输出JSON文件。")
-    parser_analyze.add_argument("--dialect", default="mysql", help="要使用的SQL方言 (例如: oracle, mysql, postgres)。默认为 'oracle'。")
+    parser_analyze.add_argument("--dialect", default="mysql",
+                                help="要使用的SQL方言 (例如: oracle, mysql, postgres)。默认为 'oracle'。")
 
     args = parser.parse_args()
 
