@@ -25,7 +25,7 @@ BATCH_SIZE = 16
 LLM_MODEL = "deepseek-chat"  # 可换其他
 API_KEY = "sk-xxxxx"
 LLM_URL = "https://api.deepseek.com"
-QUESTION = "公募基金的基金类型, 比如一级分类, 二级分类的分类代码和分类名称, 怎么查找?"
+QUESTION = "公募基金的二级分类基金类型是股票型的最近1年净值和收益率数据,只要交易日的数据,用上海市场交易日?"
 # ----------------------------------------
 
 # --------- 禁用并行 tokenizer 线程，避免脚本不退出 ----------
@@ -45,36 +45,47 @@ SYSTEM_PROMPT = """
 def call_llm(prompt: str,
              api_key: str,
              base_url: str,
+             sql_type: str,
              model: str = LLM_MODEL,
              temperature: float = 0.1) -> str:
     client = OpenAI(api_key=api_key, base_url=base_url)
+    sys_prompt = f"""
+你是一名资深数据工程师，精通{sql_type}数据库的 SQL 编写。请严格遵循以下原则：
+1. **值映射：** 若字段备注已给中文↔代码映射，请先把用户描述转换为对应代码再过滤。
+2. **表选择：** 只选择与需求直接相关的表，避免冗余 JOIN。
+3. **JOIN 条件：** 当确有关系时使用表间关联字段。
+4. **注释：** SQL 加上中文注释解释字段含义、过滤条件及 JOIN 逻辑。
+5. **执行效率：** 你写的 SQL 一定是执行效率最高的SQL代码, 绝对符合{sql_type}数据库的特性,语法,执行效率。
+    """
     resp = client.chat.completions.create(
         model=model,
         temperature=temperature,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": sys_prompt},
             {"role": "user", "content": prompt}
         ])
     return resp.choices[0].message.content.strip()
 
 
 # ------------- 构造 prompt ----------------
-def build_prompt(user_q: str, ctx_blocks: List[str]) -> str:
+def build_prompt(user_q: str, sql_type: str, ctx_blocks: List[str]) -> str:
     ctx_txt = "\n\n--- 相关表结构 ---\n" + "\n\n".join(ctx_blocks)
     return f"""{ctx_txt}
 
 --- 用户需求 ---
 {user_q}
 
-请在 ```sql ``` 块中给出最终 SQL, 并在代码块中用注释解释所用表、字段、JOIN 逻辑。
-请勿返回其他内容，只返回 ```sql ``` 块。
-"""
+请在 ```sql ``` 块中给出最终符合{sql_type}语法的 SQL, 要有详细的字段注释,关联注释,以及条件注释。
+并在代码块中用注释解释所用表、字段、JOIN 逻辑。对于你不知道的字段值映射关系,你要进行说明。
+请勿返回其他内容，只返回 ```sql ``` 块。请注意SQL的执行效率,写出最佳性能的sql代码。
+    """
 
 
 # ------------- 主函数 --------------------
 def rag_sql(question: str,
             api_key: str,
             base_url: str,
+            sql_type: str,
             top_k: int = TOP_K) -> str:
     # 1. 加载资源（全局懒加载）
     global faiss_index, id2text, embedder
@@ -96,11 +107,11 @@ def rag_sql(question: str,
         print(f"\n—— 表结构 Top-{i + 1} ——\n{block}")
 
     # 4. 构造 Prompt
-    prompt = build_prompt(question, ctx_blocks)
+    prompt = build_prompt(question, sql_type, ctx_blocks)
     print(f"\n📤 发送给大模型的Prompt如下：\n{prompt}\n")
 
     # 5. 调用 LLM
-    return call_llm(prompt, api_key=api_key, base_url=base_url)
+    return call_llm(prompt, api_key=api_key, base_url=base_url, sql_type=sql_type)
 
 
 # ---------------- CLI ----------------
@@ -110,9 +121,10 @@ if __name__ == "__main__":
     parser.add_argument("--k", type=int, default=TOP_K, help="检索 top-k")
     parser.add_argument("--key", default=API_KEY, help="OpenAI API Key")
     parser.add_argument("--url", default=LLM_URL, help="OpenAI Base URL")
+    parser.add_argument("--sql_type", default='MYSQL', help="OpenAI Base URL")
     args = parser.parse_args()
 
-    answer = rag_sql(args.question, api_key=args.key, base_url=args.url, top_k=args.k)
+    answer = rag_sql(args.question, api_key=args.key, base_url=args.url, sql_type=args.sql_type, top_k=args.k)
     print("\n=== LLM 回复 ===\n")
     print(answer)
     os._exit(0)
