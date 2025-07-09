@@ -13,6 +13,7 @@ import faiss
 from sentence_transformers import SentenceTransformer
 from openai import OpenAI, OpenAIError
 import backoff
+import requests
 
 # ----------------- 默认参数 -----------------
 INDEX_PATH = "faiss_index.bin"
@@ -23,8 +24,7 @@ TOP_K = 10
 MAX_LEN = 512
 BATCH_SIZE = 16
 LLM_MODEL = "deepseek-chat"  # 可换其他
-API_KEY = "sk-xxxxx"
-API_KEY = "sk-43a58ad2bbd740b095f5f61671ed9fae"
+API_KEY = "sk-xxx"
 LLM_URL = "https://api.deepseek.com"
 QUESTION = "公募基金的二级分类基金类型是股票型的最近1年净值和收益率数据,只要交易日的数据,用上海市场交易日?"
 DEFAULT_EMBED_MODEL_PATH = "/Users/chenjunming/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/5617a9f61b028005a4858fdac845db406aefb181"  # 默认嵌入模型路径
@@ -42,14 +42,13 @@ SYSTEM_PROMPT = """
 """
 
 
-@backoff.on_exception(backoff.expo, OpenAIError, max_tries=3)
+@backoff.on_exception(backoff.expo, (OpenAIError, requests.exceptions.RequestException), max_tries=3)
 def call_llm(prompt: str,
              api_key: str,
              base_url: str,
              sql_type: str,
              model: str = LLM_MODEL,
              temperature: float = 0.1) -> str:
-    client = OpenAI(api_key=api_key, base_url=base_url)
     sys_prompt = f"""
 你是一名资深数据工程师，精通{sql_type}数据库的 SQL 编写。请严格遵循以下原则：
 1. **值映射：** 若字段备注已给中文↔代码映射，请先把用户描述转换为对应代码再过滤。
@@ -58,14 +57,47 @@ def call_llm(prompt: str,
 4. **注释：** SQL 加上中文注释解释字段含义、过滤条件及 JOIN 逻辑。
 5. **执行效率：** 你写的 SQL 一定是执行效率最高的SQL代码, 绝对符合{sql_type}数据库的特性,语法,执行效率。
     """
-    resp = client.chat.completions.create(
-        model=model,
-        temperature=temperature,
-        messages=[
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": prompt}
-        ])
-    return resp.choices[0].message.content.strip()
+
+    if "lightcode-ui" in base_url:
+        headers = {
+            'Accept': "*/*",
+            'Accept-Encoding': "gzip, deflate, br",
+            'Authorization': f"Bearer {api_key}",
+            'Connection': "keep-alive",
+            'Content-Type': "application/json",
+            'User-Agent': "PostmanRuntime-ApipostRuntime/1.1.0"
+        }
+        payload = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            "stream": False
+        }
+        response = requests.post(base_url, headers=headers, data=json.dumps(payload))
+
+        if response.ok:
+            result = response.json()
+            print("Debug: Full response from lightcode-ui:", json.dumps(result, indent=2, ensure_ascii=False))
+            if 'choices' in result and result.get('choices'):
+                message = result['choices'][0].get('message', {})
+                if 'content' in message:
+                    return message['content'].strip()
+            raise KeyError(f"无法从响应中提取内容。收到的响应: {json.dumps(result, ensure_ascii=False)}")
+        else:
+            print("❌ 请求失败：", response.status_code, response.text)
+            response.raise_for_status()
+    else:
+        client = OpenAI(api_key=api_key, base_url=base_url)
+        resp = client.chat.completions.create(
+            model=model,
+            temperature=temperature,
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": prompt}
+            ])
+        return resp.choices[0].message.content.strip()
 
 
 # ------------- 构造 prompt ----------------
