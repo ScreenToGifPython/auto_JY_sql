@@ -116,10 +116,10 @@ def main(args):
     faiss.write_index(index, args.index)
     print(f"✅ FAISS 索引保存 → {args.index}")
 
-    # 6. 保存表名映射
+    # 6. 保存完整文本块（表结构描述）
     with open(args.map, "w", encoding="utf-8") as f:
-        json.dump(table_names, f, ensure_ascii=False, indent=2)
-    print(f"✅ 表名映射保存 → {args.map}")
+        json.dump(chunks, f, ensure_ascii=False, indent=2)
+    print(f"✅ 表结构描述保存 → {args.map}")
     os._exit(0)
 
 
