@@ -109,15 +109,31 @@ def format_table_details(table_name: str):
     return markdown_output
 
 
-def run_script_and_stream_output(full_command):
-    """
-    执行一个命令并实时流式传输其输出。
-    """
-    log_content = ""
-    yield f"▶️ 执行命令: {' '.join(full_command)}" + "-" * 20 + ""
+# --- 主逻辑 ---
+def generate_sql_and_log(question, embed_model_path, top_k, llm_model, api_key, llm_url, sql_type):
+    """执行RAG-SQL生成, 并实时捕获日志和最终SQL"""
+    if not all([question, embed_model_path, llm_model, api_key, llm_url, sql_type]):
+        error_msg = "❌ 错误: 用户问题、嵌入模型路径、LLM 模型、API 密钥、URL 和 SQL 类型不能为空."
+        yield error_msg, ""
+        return
+
+    command = [
+        sys.executable,
+        os.path.join(SCRIPT_DIR, "rag_query.py"),
+        "--question", question,
+        "--embed_model_path", embed_model_path,
+        "--k", str(int(top_k)),
+        "--key", api_key,
+        "--url", llm_url,
+        "--sql_type", sql_type
+    ]
+
+    log_content = f"▶️ 执行命令: {' '.join(command)}\n" + "-" * 20 + "\n"
+    sql_content = "⏳ 等待脚本执行..."
+    yield log_content, sql_content
 
     process = subprocess.Popen(
-        full_command,
+        command,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -129,38 +145,32 @@ def run_script_and_stream_output(full_command):
 
     for line in iter(process.stdout.readline, ''):
         log_content += line
-        yield log_content
+        yield log_content, sql_content
 
     process.stdout.close()
     return_code = process.wait()
 
     if return_code != 0:
-        log_content += f"--- 脚本执行出错, 返回码: {return_code} ---"
+        log_content += f"\n--- 脚本执行出错, 返回码: {return_code} ---\n"
+        sql_content = "❌ 执行失败"
     else:
-        log_content += "--- 脚本执行完毕 ---"
+        log_content += "\n--- 脚本执行完毕 ---\n"
+        try:
+            start_tag = "```sql"
+            end_tag = "```"
+            start_index = log_content.rfind(start_tag)
+            if start_index != -1:
+                end_index = log_content.find(end_tag, start_index + len(start_tag))
+                if end_index != -1:
+                    sql_content = log_content[start_index + len(start_tag):end_index].strip()
+                else:
+                    sql_content = "❌ 未找到SQL代码块的结束标记 '```'。"
+            else:
+                sql_content = "❌ 未在日志中找到SQL代码块的开始标记 '```sql'。"
+        except Exception as e:
+            sql_content = f"❌ 解析SQL时出错: {e}"
 
-    yield log_content
-
-
-# --- 主逻辑 ---
-def generate_sql_and_log(question, embed_model_path, top_k, llm_model, api_key, llm_url, sql_type):
-    """执行RAG-SQL生成, 并实时捕获日志"""
-    if not all([question, embed_model_path, llm_model, api_key, llm_url, sql_type]):
-        yield "❌ 错误: 用户问题、嵌入模型路径、LLM 模型、API 密钥、URL 和 SQL 类型不能为空."
-        return
-
-    command = [
-        sys.executable,  # 使用当前Python解释器
-        os.path.join(SCRIPT_DIR, "rag_query.py"),
-        "--question", question,
-        "--embed_model_path", embed_model_path,
-        "--k", str(int(top_k)),
-        "--key", api_key,
-        "--url", llm_url,
-        "--sql_type", sql_type
-    ]
-
-    yield from run_script_and_stream_output(command)
+    yield log_content, sql_content
 
 
 # --- Gradio 界面 ---
@@ -172,27 +182,29 @@ def create_ui():
         gr.Markdown("## 📝 RAG-based SQL Generator")
         gr.Markdown("通过输入自然语言问题, 检索相关库表结构, 并由大模型生成相应的 SQL 查询.")
 
-        with gr.Tab("主应用"):
+        with gr.Tab("大模型SQL生成"):
             with gr.Row():
                 with gr.Column(scale=3):
-                    # 中间：用户问题输入框
                     question_input = gr.Textbox(
                         lines=8,
                         label="用户问题",
                         placeholder=f"请输入你的数据查询需求, 例如: '{QUESTION}'"
                     )
-                    # 底部：日志和结果输出
+                    sql_result_output = gr.Code(
+                        label="SQL 生成结果",
+                        language="sql",
+                        lines=10,
+                        interactive=False
+                    )
                     log_output = gr.Textbox(
-                        lines=20,
-                        label="日志和结果",
-                        interactive=False,
-                        show_copy_button=True
+                        lines=10,
+                        label="详细日志",
+                        interactive=False
                     )
                 with gr.Column(scale=1):
-                    # 右侧：参数配置
                     gr.Markdown("#### ⚙️ 参数配置")
                     embed_model_input = gr.Textbox(
-                        value=loaded_config.get("EMBED_MODEL", ""),  # Changed default to empty string
+                        value=loaded_config.get("EMBED_MODEL", ""),
                         label="嵌入模型路径",
                         interactive=True,
                         placeholder="例如: BAAI/bge-m3 或本地模型路径"
@@ -227,8 +239,6 @@ def create_ui():
                     )
 
                     save_button = gr.Button("保存配置")
-
-                    # 按钮
                     generate_button = gr.Button("🚀 生成SQL", variant="primary")
 
             # --- 事件绑定 ---
@@ -256,7 +266,7 @@ def create_ui():
                     llm_url_input,
                     sql_type_input
                 ],
-                outputs=[log_output]
+                outputs=[log_output, sql_result_output]
             )
 
         with gr.Tab("表信息查询"):
@@ -273,7 +283,6 @@ def create_ui():
                     table_details_output = gr.Markdown(
                         label="表详细信息"
                     )
-            # 事件绑定
             query_table_button.click(
                 fn=format_table_details,
                 inputs=[table_name_query_input],
