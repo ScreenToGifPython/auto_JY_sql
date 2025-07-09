@@ -381,8 +381,94 @@ def run_table_search_agent(query, top_k, embed_model_path):
 # --- Gradio UI ---
 def create_ui():
     loaded_config = load_config()
+    
+    # Construct the absolute path for the image
+    table_info_img_path = os.path.join(SCRIPT_DIR, "pics", "table_info_csv.png")
+    sql_info_img_path = os.path.join(SCRIPT_DIR, "pics", "sql_info.png")
+    # Create the markdown string for the documentation
+    doc_markdown = f"""
+# 📖 应用使用说明
+
+欢迎使用 **智能SQL与表查询代理**！本工具旨在帮助数据分析师、开发人员和数据科学家通过自然语言与数据库进行高效交互。
+
+---
+
+## ⚠️ 首次部署必读：第一步
+
+在您开始使用任何查询功能之前，**必须首先进行数据预处理**。此步骤会创建后续所有智能功能依赖的向量索引。
+
+1.  **前往 [数据预处理] 页面**。
+2.  **检查输入文件路径**：
+    *   `表结构CSV文件路径`: 需要一个特定格式的CSV，其中包含所有需要被检索的表的结构信息。'表结构.csv' 文件样式如下:
+    <img src="/file={table_info_img_path}" width="50%" />
+    *   `SQL接口CSV文件路径`: 一个后端接口与SQL查询语句对应的CSV文件，用于自动分析表之间的关联关系 以及 接口与SQL查询语句之间的映射关系。'segment_sql.csv' 文件样式如下:
+    <img src="/file={sql_info_img_path}" width="50%" />
+3.  **配置参数**：
+    *   `SQL方言`: 用于正确解析历史SQL查询记录中的语法，以提取表关联关系。
+    *   `嵌入模型`: 这是整个应用的核心，用于将文本（表结构、用户问题）转换为向量。**请确保此处的模型与您在其他页面使用的模型一致**。您可以填入一个本地路径，或是一个Hugging Face上的模型名称（如 `BAAI/bge-m3`）。
+4.  **开始处理**：点击 **“开始一键预处理”** 按钮。处理过程可能需要一些时间，具体取决于您的数据量和机器性能。请耐心等待日志区域显示“所有预处理步骤完成！”
+
+---
+
+## 核心功能
+
+完成数据预处理后，您可以使用以下核心功能：
+
+### 1. 智能SQL生成
+-   **用途**：将您的自然语言需求（例如“查询A表中最近一个月收入最高的前10名客户”）直接转换成可以在数据库中执行的SQL语句。
+-   **如何使用**：
+    1.  在 `用户问题` 框中输入您的需求。
+    2.  在右侧配置 `检索 Top-K`（控制RAG召回的表数量）和 `目标 SQL 类型`。
+    3.  在 `大模型配置` 中填入您的LLM服务地址和API密钥。
+    4.  点击 `保存配置` 以备将来使用。
+    5.  点击 `生成SQL`，在下方查看生成的SQL和详细的执行日志。
+
+### 2. 智能表查询
+-   **用途**：当您不确定需要哪张表，或想找找看有哪些相关的表时，使用此功能。
+-   **如何使用**：
+    1.  在 `查询内容` 框中输入您想查找的数据的描述（例如“客户的订单信息”）。
+    2.  调整滑块选择希望返回的结果数量。
+    3.  点击 `查找相关表`，下方会以表格形式展示最相关的几张表、它们的相似度以及表的功能说明。
+
+### 3. 表信息查询
+-   **用途**：精确查询某一张已知表的详细结构（字段、类型、含义等）。
+-   **如何使用**：输入您已知的表名，点击 `查询表信息` 即可。
+
+"""
+
     with gr.Blocks(title="RAG SQL Generator", theme=gr.themes.Soft()) as demo:
         gr.Markdown("## 智能SQL与表查询代理")
+
+        with gr.Tab("说明文档"):
+            gr.Markdown(doc_markdown)
+
+        with gr.Tab("数据预处理"):
+            gr.Markdown("## ⚙️ 数据预处理与向量化")
+            gr.Markdown("一键完成从原始CSV到FAISS向量索引的完整流程。")
+            with gr.Row():
+                with gr.Column(scale=2):
+                    gr.Markdown("#### 输入文件路径")
+                    table_struct_csv_input = gr.Textbox(label="表结构CSV文件路径",
+                                                        value=os.path.join(SCRIPT_DIR, "表结构.csv"))
+                    segment_sql_csv_input = gr.Textbox(label="SQL日志CSV文件路径",
+                                                       value=os.path.join(SCRIPT_DIR, "segment_sql.csv"))
+                    gr.Markdown("#### 参数配置")
+                    sql_dialect_input = gr.Dropdown(label="SQL方言 (用于关系分析)",
+                                                    choices=["oracle", "mysql", "postgres", "spark"], value="mysql")
+                    preprocess_embed_model_input = gr.Textbox(label="嵌入模型 (路径或HuggingFace名称)",
+                                                              value=loaded_config.get("EMBED_MODEL",
+                                                                                      DEFAULT_EMBED_MODEL_PATH))
+                    faiss_type_input = gr.Dropdown(label="FAISS索引类型", choices=["hnsw", "flat"], value="hnsw")
+                    with gr.Row():
+                        batch_size_input = gr.Number(label="批处理大小", value=16, minimum=1, precision=0)
+                        max_len_input = gr.Number(label="最大序列长度", value=512, minimum=1, precision=0)
+                    preprocess_button = gr.Button("🚀 开始一键预处理", variant="primary")
+                with gr.Column(scale=3):
+                    preprocess_log_output = gr.Textbox(label="处理日志", lines=22, interactive=False)
+            preprocess_button.click(fn=run_preprocessing_pipeline,
+                                    inputs=[table_struct_csv_input, segment_sql_csv_input, sql_dialect_input,
+                                            preprocess_embed_model_input, faiss_type_input, batch_size_input,
+                                            max_len_input], outputs=[preprocess_log_output])
 
         with gr.Tab("智能SQL生成"):
             with gr.Row():
@@ -429,37 +515,9 @@ def create_ui():
                         interactive=False
                     )
             
-            table_search_button.click(fn=run_table_search_agent, 
+            table_search_button.click(fn=run_table_search_agent,
                                       inputs=[table_query_input, table_top_k_input, embed_model_input],
                                       outputs=[table_search_output])
-
-        with gr.Tab("数据预处理"):
-            gr.Markdown("## ⚙️ 数据预处理与向量化")
-            gr.Markdown("一键完成从原始CSV到FAISS向量索引的完整流程。")
-            with gr.Row():
-                with gr.Column(scale=2):
-                    gr.Markdown("#### 输入文件路径")
-                    table_struct_csv_input = gr.Textbox(label="表结构CSV文件路径",
-                                                        value=os.path.join(SCRIPT_DIR, "表结构.csv"))
-                    segment_sql_csv_input = gr.Textbox(label="SQL日志CSV文件路径",
-                                                       value=os.path.join(SCRIPT_DIR, "segment_sql.csv"))
-                    gr.Markdown("#### 参数配置")
-                    sql_dialect_input = gr.Dropdown(label="SQL方言 (用于关系分析)",
-                                                    choices=["oracle", "mysql", "postgres", "spark"], value="mysql")
-                    preprocess_embed_model_input = gr.Textbox(label="嵌入模型 (路径或HuggingFace名称)",
-                                                              value=loaded_config.get("EMBED_MODEL",
-                                                                                      DEFAULT_EMBED_MODEL_PATH))
-                    faiss_type_input = gr.Dropdown(label="FAISS索引类型", choices=["hnsw", "flat"], value="hnsw")
-                    with gr.Row():
-                        batch_size_input = gr.Number(label="批处理大小", value=16, minimum=1, precision=0)
-                        max_len_input = gr.Number(label="最大序列长度", value=512, minimum=1, precision=0)
-                    preprocess_button = gr.Button("🚀 开始一键预处理", variant="primary")
-                with gr.Column(scale=3):
-                    preprocess_log_output = gr.Textbox(label="处理日志", lines=22, interactive=False)
-            preprocess_button.click(fn=run_preprocessing_pipeline,
-                                    inputs=[table_struct_csv_input, segment_sql_csv_input, sql_dialect_input,
-                                            preprocess_embed_model_input, faiss_type_input, batch_size_input,
-                                            max_len_input], outputs=[preprocess_log_output])
 
         with gr.Tab("表信息查询"):
             gr.Markdown("## 🔍 表信息查询")
@@ -475,21 +533,16 @@ def create_ui():
             table_name_query_input.submit(fn=format_table_details, inputs=[table_name_query_input],
                                           outputs=[table_details_output])
 
-        with gr.Tab("说明文档"):
-            gr.Markdown("""
-                ## 📖 使用说明
-                ### 智能SQL生成
-                在此页面，您可以输入自然语言问题，并配置相关参数，调用大模型生成SQL。
-                ### 智能表查询
-                在此页面，您可以输入自然语言问题，智能体将只通过向量检索，为您返回最可能相关的几张表及其信息。
-                ### 数据预处理
-                在此页面，您可以一键完成从原始CSV到FAISS向量索引的完整流程。
-                ### 表信息查询
-                在此页面，您可以查询已在系统中存在的表的详细信息。
-                """)
     return demo
 
 
 if __name__ == "__main__":
     ui = create_ui()
-    ui.launch(server_name="0.0.0.0", server_port=7861)
+    # Define the directory to be allowed
+    pics_dir = os.path.join(SCRIPT_DIR, "pics")
+    # Launch the app with the allowed path
+    ui.launch(
+        server_name="0.0.0.0",
+        server_port=7861,
+        allowed_paths=[pics_dir]
+    )
