@@ -67,6 +67,7 @@ def build_prompt(user_q: str, ctx_blocks: List[str]) -> str:
 {user_q}
 
 请在 ```sql ``` 块中给出最终 SQL, 并在代码块中用注释解释所用表、字段、JOIN 逻辑。
+请勿返回其他内容，只返回 ```sql ``` 块。
 """
 
 
