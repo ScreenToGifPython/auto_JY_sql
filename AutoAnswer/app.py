@@ -492,28 +492,34 @@ def search_interface_sql(query, search_mode, top_n, embed_model_path, progress=g
     if search_mode == "精确匹配":
         progress(0.5, desc="正在进行精确搜索...")
         data = load_extracted_data()
-        if not data: gr.Warning("extracted_data.json 未加载或为空。请先运行数据预处理。"); return None
-        results = [[item.get("req_url"), item.get("db_sql")] for item in data if
-                   query and query in item.get("req_url", "")]
-        if not results: gr.Info("未找到包含查询词的接口。"); return None
-        return pd.DataFrame(results, columns=["接口 (req_url)", "SQL (db_sql)"])
+        if not data: gr.Warning("extracted_data.json 未加载或为空。请先运行数据预处理。"); return None, None
+        display_data = []
+        full_data = []
+        for item in data:
+            if query and query in item.get("req_url", ""):
+                display_data.append(["", item.get("req_url")])
+                full_data.append({"req_url": item.get("req_url"), "db_sql": item.get("db_sql")})
+        if not display_data: gr.Info("未找到包含查询词的接口。"); return None, None
+        return pd.DataFrame(display_data, columns=["相似度", "接口 (req_url)"]), full_data
     elif search_mode == "模糊匹配":
         progress(0, desc="加载接口索引...")
         interface_index, interface_mapping = load_interface_search_data()
         if not interface_index or not interface_mapping: gr.Warning(
-            "接口索引文件未找到。请先运行数据预处理。"); return None
+            "接口索引文件未找到。请先运行数据预处理。"); return None, None
         progress(0.2, desc="加载嵌入模型...")
         try:
             model = SentenceTransformer(embed_model_path, trust_remote_code=True)
         except Exception as e:
             gr.Warning(f"加载嵌入模型失败: {e}");
-            return None
+            return None, None
         progress(0.5, desc="编码查询...")
         query_embedding = model.encode([query], normalize_embeddings=True).astype("float32")
         progress(0.7, desc="在FAISS中搜索...")
         distances, indices = interface_index.search(query_embedding, int(top_n))
         progress(0.9, desc="格式化结果...")
-        output_data = []
+        display_data = []
+        full_data = []
+        seen_req_urls = set() # Add a set to track seen req_urls
         global _EXTRACTED_DATA
         for i, idx in enumerate(indices[0]):
             if idx == -1: continue
@@ -521,10 +527,16 @@ def search_interface_sql(query, search_mode, top_n, embed_model_path, progress=g
             if not original_item_id: continue
             item = _EXTRACTED_DATA.get(original_item_id)
             if not item: continue
+            req_url = item.get("req_url")
+            if req_url in seen_req_urls: # Check if req_url has already been added
+                continue # Skip if already seen
+            seen_req_urls.add(req_url) # Add to seen set
+
             dist = distances[0][i]
             similarity = max(0, 1 - (dist ** 2) / 2)
-            output_data.append([f"{similarity:.2%}", item.get("req_url"), item.get("db_sql")])
-        return pd.DataFrame(output_data, columns=["相似度", "接口 (req_url)", "SQL (db_sql)"])
+            display_data.append([f"{similarity:.2%}", req_url])
+            full_data.append({"req_url": req_url, "db_sql": item.get("db_sql")})
+        return pd.DataFrame(display_data, columns=["相似度", "接口 (req_url)"]), full_data
 
 
 def search_table_info(query, search_mode, top_n, embed_model_path, progress=gr.Progress()):
@@ -536,7 +548,7 @@ def search_table_info(query, search_mode, top_n, embed_model_path, progress=gr.P
         for name in all_tables:
             if query and query.upper() in name.upper():
                 description = all_tables[name].get("description", "无")
-                results.append(["", name, description]) # Add empty string for similarity
+                results.append(["", name, description])  # Add empty string for similarity
         if not results: gr.Info("未找到包含查询词的表名。"); return None, ""
         return pd.DataFrame(results, columns=["相似度", "表名", "表说明"]), ""
     elif search_mode == "模糊匹配":
@@ -556,7 +568,7 @@ def search_table_info(query, search_mode, top_n, embed_model_path, progress=gr.P
         distances, indices = tablename_index.search(query_embedding, int(top_n))
         progress(0.9, desc="格式化结果...")
         output_data = []
-        all_tables = load_table_data() # Load table data for description
+        all_tables = load_table_data()  # Load table data for description
         for i, idx in enumerate(indices[0]):
             if idx == -1: continue
             table_name = tablename_mapping.get(str(idx))
@@ -738,7 +750,8 @@ def create_ui():
                         table_info_top_k = gr.Slider(minimum=1, maximum=50, value=10, step=1,
                                                      label="模糊匹配返回结果数")
                     table_info_button = gr.Button("查询表信息", variant="primary")
-                    table_info_results_df = gr.DataFrame(headers=["相似度", "表名", "表说明"], label="查询结果列表(点击表名查看表信息)", interactive=True)
+                    table_info_results_df = gr.DataFrame(headers=["相似度", "表名", "表说明"],
+                                                         label="查询结果列表(点击表名查看表信息)", interactive=True)
                 with gr.Column(scale=3):
                     table_info_details_md = gr.Markdown(label="表详细信息")
 
@@ -758,6 +771,7 @@ def create_ui():
 
         # New Tab for Interface SQL Query
         with gr.Tab("接口SQL查询(基于接口)"):
+            interface_full_data_state = gr.State(value=None) # Define the state here
             gr.Markdown("## 🔗 接口SQL查询")
             gr.Markdown("输入接口URL，查找对应的SQL语句。")
             with gr.Row():
@@ -769,17 +783,41 @@ def create_ui():
                         interface_top_n_input = gr.Slider(minimum=1, maximum=20, value=5, step=1,
                                                           label="模糊匹配返回结果数")
                     interface_search_button = gr.Button("查询接口SQL", variant="primary")
-                with gr.Column(scale=3):
                     interface_search_output = gr.DataFrame(
-                        headers=["相似度", "接口 (req_url)", "SQL (db_sql)"],
-                        label="查询结果",
-                        interactive=False
+                        headers=["相似度", "接口 (req_url)"],
+                        label="查询结果列表(点击接口查看SQL)",
+                        interactive=True
                     )
+                with gr.Column(scale=3):
+                    sql_display_output = gr.Code(label="SQL 语句", language="sql", lines=10, interactive=False)
 
             interface_search_button.click(fn=search_interface_sql,
                                           inputs=[interface_query_input, interface_search_mode,
                                                   interface_top_n_input, preprocess_embed_model_input],
-                                          outputs=[interface_search_output])
+                                          outputs=[interface_search_output, interface_full_data_state]) # Update outputs
+
+            def get_sql_on_interface_select(df, evt: gr.SelectData, full_data_state): # Add full_data_state as input
+                print(f"Event triggered. evt.value: {evt.value}, evt.index: {evt.index}")
+                if evt.value is not None and full_data_state is not None:
+                    selected_req_url = df.iloc[evt.index[0]][1] # Get req_url from displayed DataFrame
+                    print(f"Selected req_url: {selected_req_url}")
+
+                    found_sql = "未找到对应的SQL语句。"
+                    # Look up SQL in full_data_state
+                    for item_data in full_data_state:
+                        if item_data.get("req_url") == selected_req_url:
+                            found_sql = item_data.get("db_sql", "未找到SQL")
+                            break
+                    print(f"Returning SQL: {found_sql}")
+                    return found_sql
+                print("evt.value is None or full_data_state is None. Returning empty string.")
+                return ""
+
+            interface_search_output.select(fn=get_sql_on_interface_select,
+                                           inputs=[interface_search_output, interface_full_data_state], # Add interface_full_data_state as input
+                                           outputs=[sql_display_output])
+
+            
 
     return demo
 
