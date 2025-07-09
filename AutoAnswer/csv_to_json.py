@@ -1,6 +1,6 @@
-
 import csv
 import json
+
 
 def parse_csv_to_json(csv_file_path, json_file_path):
     """
@@ -33,7 +33,7 @@ def parse_csv_to_json(csv_file_path, json_file_path):
                 if row and row[0].strip() == '表名':
                     if current_table_name and current_table_data:
                         tables_dict[current_table_name] = current_table_data
-                    
+
                     table_name = row[1].strip() if len(row) > 1 else ''
                     if table_name:
                         current_table_name = table_name
@@ -82,8 +82,9 @@ def parse_csv_to_json(csv_file_path, json_file_path):
     except Exception as e:
         print(f"处理文件时发生错误: {e}")
 
+
 if __name__ == '__main__':
     # 使用绝对路径以确保脚本在任何位置都能正确运行
-    csv_path = '/Users/chenjunming/Desktop/AutAnswer/表结构.csv'
-    json_path = '/Users/chenjunming/Desktop/AutAnswer/table_info.json'
+    csv_path = '/Users/chenjunming/Desktop/auto_JY_sql/AutoAnswer/表结构.csv'
+    json_path = 'table_info.json'
     parse_csv_to_json(csv_path, json_path)
