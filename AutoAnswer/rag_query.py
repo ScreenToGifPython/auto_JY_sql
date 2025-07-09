@@ -23,9 +23,9 @@ TOP_K = 10
 MAX_LEN = 512
 BATCH_SIZE = 16
 LLM_MODEL = "deepseek-chat"  # 可换其他
-API_KEY = "sk-43a58ad2bbd740b095f5f61671ed9fae"
+API_KEY = "sk-xxxxx"
 LLM_URL = "https://api.deepseek.com"
-QUESTION = "怎么查找周频私募基金的日涨跌数据?"
+QUESTION = "公募基金的基金类型, 比如一级分类, 二级分类的分类代码和分类名称, 怎么查找?"
 # ----------------------------------------
 
 # --------- 禁用并行 tokenizer 线程，避免脚本不退出 ----------
