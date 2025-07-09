@@ -596,7 +596,7 @@ def create_ui():
 
 完成数据预处理后，您可以使用以下核心功能：
 
-### 1. 大模型SQL生成
+### 1. 大模型SQL生成(自然语言)
 -   **用途**：将您的自然语言需求（例如“查询A表中最近一个月收入最高的前10名客户”）直接转换成可以在数据库中执行的SQL语句。
 -   **如何使用**：
     1.  在 `用户问题` 框中输入您的需求。
@@ -605,17 +605,24 @@ def create_ui():
     4.  点击 `保存配置` 以备将来使用。
     5.  点击 `生成SQL`，在下方查看生成的SQL和详细的执行日志。
 
-### 2. 大模型表查询
+### 2. 大模型表查询(自然语言)
 -   **用途**：当您不确定需要哪张表，或想找找看有哪些相关的表时，使用此功能。
 -   **如何使用**：
     1.  在 `查询内容` 框中输入您想查找的数据的描述（例如“客户的订单信息”）。
     2.  调整滑块选择希望返回的结果数量。
     3.  点击 `查找相关表`，下方会以表格形式展示最相关的几张表、它们的相似度以及表的功能说明。
 
-### 3. 表信息查询
+### 3. 表信息查询(基于表名)
 -   **用途**：精确查询某一张已知表的详细结构（字段、类型、含义等）。
 -   **如何使用**：输入您已知的表名，点击 `查询表信息` 即可。
 
+### 4. 接口SQL查询(基于接口)
+-   **用途**：根据接口URL查找对应的SQL语句。
+-   **如何使用**：
+    1.  在 `接口查询` 框中输入接口URL。
+    2.  选择 `查询模式` (精确匹配或模糊匹配)。
+    3.  如果选择模糊匹配，调整 `模糊匹配返回结果数`。
+    4.  点击 `查询接口SQL`，下方会显示查询结果。
 """
 
     with gr.Blocks(title="RAG SQL Generator", theme=gr.themes.Soft()) as demo:
@@ -652,7 +659,7 @@ def create_ui():
                                             preprocess_embed_model_input, faiss_type_input, batch_size_input,
                                             max_len_input], outputs=[preprocess_log_output])
 
-        with gr.Tab("大模型SQL生成"):
+        with gr.Tab("大模型SQL生成(自然语言)"):
             with gr.Row():
                 with gr.Column(scale=3):
                     question_input = gr.Textbox(lines=8, label="用户问题", placeholder=f"例如: '{QUESTION}'")
@@ -682,7 +689,7 @@ def create_ui():
                                           api_key_input, llm_url_input, sql_type_input],
                                   outputs=[log_output, sql_result_output])
 
-        with gr.Tab("大模型表查询"):
+        with gr.Tab("大模型表查询(自然语言)"):
             gr.Markdown("## 🤖 智能表查询")
             gr.Markdown("输入您想查询的数据内容，智能体将为您找到最相关的几张表。")
             with gr.Row():
@@ -701,7 +708,7 @@ def create_ui():
                                       inputs=[table_query_input, table_top_k_input, embed_model_input],
                                       outputs=[table_search_output])
 
-        with gr.Tab("表信息查询(基于表名查询)"):
+        with gr.Tab("表信息查询(基于表名)"):
             gr.Markdown("## 🔍 表信息查询")
             gr.Markdown("输入表名或相关描述，查询其详细结构、含义及关联信息。")
             with gr.Row():
@@ -729,6 +736,30 @@ def create_ui():
 
             table_info_results_df.select(fn=get_details_on_select, inputs=[table_info_results_df],
                                          outputs=[table_info_details_md])
+
+        # New Tab for Interface SQL Query
+        with gr.Tab("接口SQL查询(基于接口)"):
+            gr.Markdown("## 🔗 接口SQL查询")
+            gr.Markdown("输入接口URL，查找对应的SQL语句。")
+            with gr.Row():
+                with gr.Column(scale=2):
+                    interface_query_input = gr.Textbox(label="接口查询", placeholder="例如: POST:/wealth/custview/queryCustFocusPro")
+                    with gr.Row():
+                        interface_search_mode = gr.Radio(["精确匹配", "模糊匹配"], label="查询模式", value="精确匹配")
+                        interface_top_n_input = gr.Slider(minimum=1, maximum=20, value=5, step=1,
+                                                           label="模糊匹配返回结果数")
+                    interface_search_button = gr.Button("查询接口SQL", variant="primary")
+                with gr.Column(scale=3):
+                    interface_search_output = gr.DataFrame(
+                        headers=["相似度", "接口 (req_url)", "SQL (db_sql)"],
+                        label="查询结果",
+                        interactive=False
+                    )
+
+            interface_search_button.click(fn=search_interface_sql,
+                                          inputs=[interface_query_input, interface_search_mode,
+                                                  interface_top_n_input, preprocess_embed_model_input],
+                                          outputs=[interface_search_output])
 
     return demo
 
