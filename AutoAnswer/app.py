@@ -338,8 +338,10 @@ def load_table_data():
     global _TABLE_DATA
     if _TABLE_DATA is None:
         try:
-            with open(TABLE_JSON_PATH, 'r', encoding='utf-8') as f: _TABLE_DATA = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError): _TABLE_DATA = {}
+            with open(TABLE_JSON_PATH, 'r', encoding='utf-8') as f:
+                _TABLE_DATA = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            _TABLE_DATA = {}
     return _TABLE_DATA
 
 
@@ -530,9 +532,13 @@ def search_table_info(query, search_mode, top_n, embed_model_path, progress=gr.P
         progress(0.5, desc="正在进行精确搜索...")
         all_tables = load_table_data()
         if not all_tables: gr.Warning("table.json 未加载或为空。请先运行数据预处理。"); return None, ""
-        results = [[name] for name in all_tables if query and query.upper() in name.upper()]
+        results = []
+        for name in all_tables:
+            if query and query.upper() in name.upper():
+                description = all_tables[name].get("description", "无")
+                results.append(["", name, description]) # Add empty string for similarity
         if not results: gr.Info("未找到包含查询词的表名。"); return None, ""
-        return pd.DataFrame(results, columns=["表名"]), ""
+        return pd.DataFrame(results, columns=["相似度", "表名", "表说明"]), ""
     elif search_mode == "模糊匹配":
         progress(0, desc="加载表名索引...")
         tablename_index, tablename_mapping = load_tablename_search_data()
@@ -550,20 +556,22 @@ def search_table_info(query, search_mode, top_n, embed_model_path, progress=gr.P
         distances, indices = tablename_index.search(query_embedding, int(top_n))
         progress(0.9, desc="格式化结果...")
         output_data = []
+        all_tables = load_table_data() # Load table data for description
         for i, idx in enumerate(indices[0]):
             if idx == -1: continue
             table_name = tablename_mapping.get(str(idx))
             if not table_name: continue
             dist = distances[0][i]
             similarity = max(0, 1 - (dist ** 2) / 2)
-            output_data.append([f"{similarity:.2%}", table_name])
-        return pd.DataFrame(output_data, columns=["相似度", "表名"]), ""
+            description = all_tables.get(table_name, {}).get("description", "无")
+            output_data.append([f"{similarity:.2%}", table_name, description])
+        return pd.DataFrame(output_data, columns=["相似度", "表名", "表说明"]), ""
 
 
 # --- Gradio UI ---
 def create_ui():
     loaded_config = load_config()
-    
+
     # Construct the absolute path for the image
     table_info_img_path = os.path.join(SCRIPT_DIR, "pics", "table_info_csv.png")
     sql_info_img_path = os.path.join(SCRIPT_DIR, "pics", "sql_info.png")
@@ -667,7 +675,8 @@ def create_ui():
                     log_output = gr.Textbox(lines=10, label="详细日志", interactive=False)
                 with gr.Column(scale=1):
                     gr.Markdown("#### ⚙️ 参数配置")
-                    embed_model_input = gr.Textbox(value=loaded_config.get("EMBED_MODEL", DEFAULT_EMBED_MODEL_PATH), label="嵌入模型路径",
+                    embed_model_input = gr.Textbox(value=loaded_config.get("EMBED_MODEL", DEFAULT_EMBED_MODEL_PATH),
+                                                   label="嵌入模型路径",
                                                    interactive=True, placeholder="例如: BAAI/bge-m3")
                     top_k_input = gr.Slider(minimum=1, maximum=50, value=loaded_config.get("TOP_K", 10), step=1,
                                             label="检索 Top-K")
@@ -689,26 +698,36 @@ def create_ui():
                                           api_key_input, llm_url_input, sql_type_input],
                                   outputs=[log_output, sql_result_output])
 
-        with gr.Tab("大模型表查询(自然语言)"):
-            gr.Markdown("## 🤖 智能表查询")
-            gr.Markdown("输入您想查询的数据内容，智能体将为您找到最相关的几张表。")
-            with gr.Row():
-                with gr.Column(scale=2):
-                    table_query_input = gr.Textbox(label="查询内容", placeholder="例如：查询所有客户的风险等级和收益率")
-                    table_top_k_input = gr.Slider(minimum=1, maximum=20, value=5, step=1, label="返回结果数量")
-                    table_search_button = gr.Button("查找相关表", variant="primary")
-                with gr.Column(scale=3):
-                    table_search_output = gr.DataFrame(
-                        headers=["相似度", "表名", "表说明"],
-                        label="查询结果",
-                        interactive=False
-                    )
-            
-            table_search_button.click(fn=run_table_search_agent,
-                                      inputs=[table_query_input, table_top_k_input, embed_model_input],
-                                      outputs=[table_search_output])
+        # with gr.Tab("大模型表查询(自然语言)"):
+        #     gr.Markdown("## 🤖 智能表查询")
+        #     gr.Markdown("输入您想查询的数据内容，智能体将为您找到最相关的几张表。")
+        #     with gr.Row():
+        #         with gr.Column(scale=2):
+        #             table_query_input = gr.Textbox(label="查询内容", placeholder="例如：查询所有客户的风险等级和收益率")
+        #             table_top_k_input = gr.Slider(minimum=1, maximum=20, value=5, step=1, label="返回结果数量")
+        #             table_search_button = gr.Button("查找相关表", variant="primary")
+        #             table_search_output = gr.DataFrame(
+        #                 headers=["相似度", "表名", "表说明"],
+        #                 label="查询结果列表(点击表名查看表信息)",
+        #                 interactive=True
+        #             )
+        #         with gr.Column(scale=3):
+        #             table_details_output = gr.Markdown(label="表详细信息")
+        #
+        #     table_search_button.click(fn=run_table_search_agent,
+        #                               inputs=[table_query_input, table_top_k_input, embed_model_input],
+        #                               outputs=[table_search_output])
+        #
+        #     def get_table_details_on_select(df, evt: gr.SelectData):
+        #         if evt.value is not None:
+        #             selected_table_name = df.iloc[evt.index[0]][1]
+        #             return format_table_details(selected_table_name)
+        #         return "请从上方列表选择一张表以查看详情。"
+        #
+        #     table_search_output.select(fn=get_table_details_on_select, inputs=[table_search_output],
+        #                                outputs=[table_details_output])
 
-        with gr.Tab("表信息查询(基于表名)"):
+        with gr.Tab("表信息查询(表名或描述)"):
             gr.Markdown("## 🔍 表信息查询")
             gr.Markdown("输入表名或相关描述，查询其详细结构、含义及关联信息。")
             with gr.Row():
@@ -719,7 +738,7 @@ def create_ui():
                         table_info_top_k = gr.Slider(minimum=1, maximum=50, value=10, step=1,
                                                      label="模糊匹配返回结果数")
                     table_info_button = gr.Button("查询表信息", variant="primary")
-                    table_info_results_df = gr.DataFrame(headers=["表名"], label="查询结果列表(点击表名查看表信息)", interactive=True)
+                    table_info_results_df = gr.DataFrame(headers=["相似度", "表名", "表说明"], label="查询结果列表(点击表名查看表信息)", interactive=True)
                 with gr.Column(scale=3):
                     table_info_details_md = gr.Markdown(label="表详细信息")
 
@@ -730,7 +749,7 @@ def create_ui():
 
             def get_details_on_select(df, evt: gr.SelectData):
                 if evt.value is not None:
-                    selected_table_name = df.iloc[evt.index[0]][-1]  # Get name, works for both modes
+                    selected_table_name = df.iloc[evt.index[0]][1]  # Get name, works for both modes
                     return format_table_details(selected_table_name)
                 return "请从上方列表选择一张表以查看详情。"
 
@@ -743,11 +762,12 @@ def create_ui():
             gr.Markdown("输入接口URL，查找对应的SQL语句。")
             with gr.Row():
                 with gr.Column(scale=2):
-                    interface_query_input = gr.Textbox(label="接口查询", placeholder="例如: POST:/wealth/custview/queryCustFocusPro")
+                    interface_query_input = gr.Textbox(label="接口查询",
+                                                       placeholder="例如: POST:/wealth/custview/queryCustFocusPro")
                     with gr.Row():
                         interface_search_mode = gr.Radio(["精确匹配", "模糊匹配"], label="查询模式", value="精确匹配")
                         interface_top_n_input = gr.Slider(minimum=1, maximum=20, value=5, step=1,
-                                                           label="模糊匹配返回结果数")
+                                                          label="模糊匹配返回结果数")
                     interface_search_button = gr.Button("查询接口SQL", variant="primary")
                 with gr.Column(scale=3):
                     interface_search_output = gr.DataFrame(
