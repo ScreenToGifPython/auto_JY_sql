@@ -7,14 +7,17 @@ rag_sql_generator.py
 Author: KevinChen
 """
 
-import os, json, argparse, sys
-from typing import List
-import numpy as np
 import faiss
-from sentence_transformers import SentenceTransformer
-from openai import OpenAI, OpenAIError
 import backoff
+import warnings
 import requests
+from typing import List
+import os, json, argparse, sys
+from openai import OpenAI, OpenAIError
+from sentence_transformers import SentenceTransformer
+
+# 忽略警告
+warnings.filterwarnings("ignore")
 
 # ----------------- 默认参数 -----------------
 INDEX_PATH = "faiss_index.bin"
