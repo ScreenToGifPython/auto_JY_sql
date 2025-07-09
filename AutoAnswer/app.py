@@ -31,9 +31,16 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 QUESTION = "公募基金的二级分类基金类型是股票型的最近1年净值和收益率数据,只要交易日的数据,用上海市场交易日?"
 DEFAULT_EMBED_MODEL_PATH = "BAAI/bge-m3"
 
-# 表信息文件路径
+# --- 全局缓存 ---
 TABLE_JSON_PATH = os.path.join(SCRIPT_DIR, "table.json")
 _TABLE_DATA = None
+EXTRACTED_DATA_PATH = os.path.join(SCRIPT_DIR, "extracted_data.json")
+_EXTRACTED_DATA = None
+_EXTRACTED_DATA_LIST = None
+_INTERFACE_INDEX = None
+_INTERFACE_MAPPING = None
+_TABLENAME_INDEX = None
+_TABLENAME_MAPPING = None
 
 
 # --- Data Preprocessing Functions (Integrated) ---
@@ -177,20 +184,21 @@ def create_text_chunks_from_json(src_json: dict) -> Tuple[List[str], List[str]]:
     return table_names, text_chunks
 
 
-def run_vectorization(model_path, json_path, index_path, map_path, index_type, batch, max_len, progress=gr.Progress()):
-    progress(0, desc="读取JSON...")
+def run_table_vectorization(model_path, json_path, index_path, map_path, index_type, batch, max_len,
+                            progress=gr.Progress()):
+    progress(0, desc="[表向量化] 读取JSON...")
     with open(json_path, 'r', encoding='utf-8') as f:
         table_defs = json.load(f)
-    progress(0.1, desc="生成文本块...")
+    progress(0.1, desc="[表向量化] 生成文本块...")
     _, chunks = create_text_chunks_from_json(table_defs)
     if not chunks: raise ValueError("无文本块生成，退出")
-    progress(0.2, desc="加载嵌入模型...")
+    progress(0.2, desc="[表向量化] 加载嵌入模型...")
     model = SentenceTransformer(model_path, trust_remote_code=True)
     model.max_seq_length = max_len
-    progress(0.4, desc="编码向量...")
+    progress(0.4, desc="[表向量化] 编码表结构...")
     vecs = model.encode(chunks, batch_size=batch, show_progress_bar=True, normalize_embeddings=True,
                         convert_to_numpy=True).astype("float32")
-    progress(0.8, desc=f"构建 {index_type} 索引...")
+    progress(0.8, desc=f"[表向量化] 构建 {index_type} 索引...")
     dim = vecs.shape[1]
     if index_type == "flat":
         index = faiss.IndexFlatL2(dim)
@@ -202,10 +210,70 @@ def run_vectorization(model_path, json_path, index_path, map_path, index_type, b
     else:
         raise ValueError("索引类型仅支持 flat / hnsw")
     faiss.write_index(index, index_path)
-    progress(0.9, desc="保存FAISS索引...")
+    progress(0.9, desc="[表向量化] 保存FAISS索引...")
     with open(map_path, "w", encoding="utf-8") as f:
         json.dump(chunks, f, ensure_ascii=False, indent=2)
-    progress(1, desc="保存表结构映射...")
+    progress(1, desc="[表向量化] 保存表结构映射...")
+
+
+def run_interface_vectorization(model_path, extracted_data_path, index_path, map_path, batch, max_len,
+                                progress=gr.Progress()):
+    progress(0, desc="[接口向量化] 读取已提取的数据...")
+    with open(extracted_data_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    corpus, mapping = [], {}
+    i = 0
+    for item_id, content in data.items():
+        req_url = content.get("req_url")
+        if req_url:
+            corpus.append(req_url)
+            mapping[i] = item_id
+            i += 1
+    if not corpus: raise ValueError("extracted_data.json中没有找到有效的req_url。")
+    progress(0.2, desc="[接口向量化] 加载嵌入模型...")
+    model = SentenceTransformer(model_path, trust_remote_code=True)
+    model.max_seq_length = max_len
+    progress(0.4, desc="[接口向量化] 编码接口URL...")
+    vecs = model.encode(corpus, batch_size=batch, show_progress_bar=True, normalize_embeddings=True,
+                        convert_to_numpy=True).astype("float32")
+    progress(0.8, desc="[接口向量化] 构建FAISS索引...")
+    index = faiss.IndexFlatL2(vecs.shape[1])
+    index.add(vecs)
+    faiss.write_index(index, index_path)
+    progress(0.9, desc="[接口向量化] 保存FAISS索引...")
+    with open(map_path, "w", encoding="utf-8") as f:
+        json.dump(mapping, f, ensure_ascii=False, indent=2)
+    progress(1, desc="[接口向量化] 保存ID映射...")
+
+
+def run_tablename_vectorization(model_path, table_data_path, index_path, map_path, batch, max_len,
+                                progress=gr.Progress()):
+    progress(0, desc="[表名向量化] 读取table.json...")
+    with open(table_data_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    corpus, mapping = [], {}
+    i = 0
+    for table_name, content in data.items():
+        description = content.get("description", "")
+        text_to_embed = f"表名: {table_name}, 表含义: {description}"
+        corpus.append(text_to_embed)
+        mapping[i] = table_name
+        i += 1
+    if not corpus: raise ValueError("table.json中没有找到有效的表。")
+    progress(0.2, desc="[表名向量化] 加载嵌入模型...")
+    model = SentenceTransformer(model_path, trust_remote_code=True)
+    model.max_seq_length = max_len
+    progress(0.4, desc="[表名向量化] 编码表名和描述...")
+    vecs = model.encode(corpus, batch_size=batch, show_progress_bar=True, normalize_embeddings=True,
+                        convert_to_numpy=True).astype("float32")
+    progress(0.8, desc="[表名向量化] 构建FAISS索引...")
+    index = faiss.IndexFlatL2(vecs.shape[1])
+    index.add(vecs)
+    faiss.write_index(index, index_path)
+    progress(0.9, desc="[表名向量化] 保存FAISS索引...")
+    with open(map_path, "w", encoding="utf-8") as f:
+        json.dump(mapping, f, ensure_ascii=False, indent=2)
+    progress(1, desc="[表名向量化] 保存表名映射...")
 
 
 def run_preprocessing_pipeline(table_struct_csv, segment_sql_csv, sql_dialect, embed_model, faiss_type, batch_size,
@@ -213,35 +281,51 @@ def run_preprocessing_pipeline(table_struct_csv, segment_sql_csv, sql_dialect, e
     log_output = ""
 
     def log(msg):
-        nonlocal log_output; log_output += msg + "\n"; return log_output
+        nonlocal log_output;
+        log_output += msg + "\n";
+        return log_output
 
     try:
-        yield log("【步骤 1/5】 正在转换表结构 CSV -> JSON...")
+        yield log("【步骤 1/7】 正在转换表结构 CSV -> JSON...")
         table_info_json = os.path.join(SCRIPT_DIR, "table_info.json")
         parse_csv_to_json(table_struct_csv, table_info_json)
-        yield log("【步骤 1/5】 ✅ 成功生成 table_info.json")
+        yield log("【步骤 1/7】 ✅ 成功生成 table_info.json")
 
-        yield log("\n【步骤 2/5】 正在从 SQL 日志提取数据...")
+        yield log("\n【步骤 2/7】 正在从 SQL 日志提取数据...")
         extracted_data_json = os.path.join(SCRIPT_DIR, "extracted_data.json")
         extract_data_to_json(segment_sql_csv, extracted_data_json)
-        yield log("【步骤 2/5】 ✅ 成功生成 extracted_data.json")
+        yield log("【步骤 2/7】 ✅ 成功生成 extracted_data.json")
 
-        yield log(f"\n【步骤 3/5】 正在使用 {sql_dialect} 方言分析 SQL 关系...")
+        yield log("\n【步骤 3/7】 正在向量化接口信息...")
+        interface_index_path = os.path.join(SCRIPT_DIR, "interface_faiss.bin")
+        interface_map_path = os.path.join(SCRIPT_DIR, "interface_mapping.json")
+        run_interface_vectorization(embed_model, extracted_data_json, interface_index_path, interface_map_path,
+                                    int(batch_size), int(max_len), progress)
+        yield log("【步骤 3/7】 ✅ 成功生成接口FAISS索引。")
+
+        yield log(f"\n【步骤 4/7】 正在使用 {sql_dialect} 方言分析 SQL 关系...")
         table_relation_json = os.path.join(SCRIPT_DIR, "table_relation.json")
         analyze_sql_relationships(extracted_data_json, table_relation_json, dialect=sql_dialect)
-        yield log("【步骤 3/5】 ✅ 成功生成 table_relation.json")
+        yield log("【步骤 4/7】 ✅ 成功生成 table_relation.json")
 
-        yield log("\n【步骤 4/5】 正在合并表信息与关系...")
+        yield log("\n【步骤 5/7】 正在合并表信息与关系...")
         final_table_json = os.path.join(SCRIPT_DIR, "table.json")
         merge_and_govern_relations(table_info_json, table_relation_json, final_table_json)
-        yield log("【步骤 4/5】 ✅ 成功生成 table.json")
+        yield log("【步骤 5/7】 ✅ 成功生成 table.json")
 
-        yield log("\n【步骤 5/5】 正在向量化表结构...")
+        yield log("\n【步骤 6/7】 正在向量化完整表结构(用于SQL生成)...")
         faiss_index_bin = os.path.join(SCRIPT_DIR, "faiss_index.bin")
         table_mapping_json = os.path.join(SCRIPT_DIR, "table_mapping.json")
-        run_vectorization(embed_model, final_table_json, faiss_index_bin, table_mapping_json, faiss_type,
-                          int(batch_size), int(max_len), progress)
-        yield log("【步骤 5/5】 ✅ 成功生成 FAISS 索引和映射文件。")
+        run_table_vectorization(embed_model, final_table_json, faiss_index_bin, table_mapping_json, faiss_type,
+                                int(batch_size), int(max_len), progress)
+        yield log("【步骤 6/7】 ✅ 成功生成表结构FAISS索引。")
+
+        yield log("\n【步骤 7/7】 正在向量化表名(用于表查询)...")
+        tablename_index_path = os.path.join(SCRIPT_DIR, "tablename_faiss.bin")
+        tablename_map_path = os.path.join(SCRIPT_DIR, "tablename_mapping.json")
+        run_tablename_vectorization(embed_model, final_table_json, tablename_index_path, tablename_map_path,
+                                    int(batch_size), int(max_len), progress)
+        yield log("【步骤 7/7】 ✅ 成功生成表名FAISS索引。")
 
         yield log("\n🎉 所有预处理步骤完成！")
     except Exception as e:
@@ -254,11 +338,52 @@ def load_table_data():
     global _TABLE_DATA
     if _TABLE_DATA is None:
         try:
-            with open(TABLE_JSON_PATH, 'r', encoding='utf-8') as f:
-                _TABLE_DATA = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            _TABLE_DATA = {}
+            with open(TABLE_JSON_PATH, 'r', encoding='utf-8') as f: _TABLE_DATA = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError): _TABLE_DATA = {}
     return _TABLE_DATA
+
+
+def load_extracted_data():
+    global _EXTRACTED_DATA, _EXTRACTED_DATA_LIST
+    if _EXTRACTED_DATA is None:
+        try:
+            with open(EXTRACTED_DATA_PATH, 'r', encoding='utf-8') as f:
+                _EXTRACTED_DATA = json.load(f)
+                _EXTRACTED_DATA_LIST = [{"id": k, **v} for k, v in _EXTRACTED_DATA.items()]
+        except (FileNotFoundError, json.JSONDecodeError):
+            _EXTRACTED_DATA, _EXTRACTED_DATA_LIST = {}, []
+    return _EXTRACTED_DATA_LIST
+
+
+def load_interface_search_data():
+    global _INTERFACE_INDEX, _INTERFACE_MAPPING
+    load_extracted_data()
+    if _INTERFACE_INDEX is None:
+        try:
+            index_path = os.path.join(SCRIPT_DIR, "interface_faiss.bin")
+            map_path = os.path.join(SCRIPT_DIR, "interface_mapping.json")
+            _INTERFACE_INDEX = faiss.read_index(index_path)
+            with open(map_path, 'r', encoding='utf-8') as f:
+                _INTERFACE_MAPPING = json.load(f)
+        except Exception as e:
+            gr.Warning(f"加载接口索引失败: {e}. 模糊搜索将不可用。")
+            _INTERFACE_INDEX, _INTERFACE_MAPPING = None, None
+    return _INTERFACE_INDEX, _INTERFACE_MAPPING
+
+
+def load_tablename_search_data():
+    global _TABLENAME_INDEX, _TABLENAME_MAPPING
+    if _TABLENAME_INDEX is None:
+        try:
+            index_path = os.path.join(SCRIPT_DIR, "tablename_faiss.bin")
+            map_path = os.path.join(SCRIPT_DIR, "tablename_mapping.json")
+            _TABLENAME_INDEX = faiss.read_index(index_path)
+            with open(map_path, 'r', encoding='utf-8') as f:
+                _TABLENAME_MAPPING = json.load(f)
+        except Exception as e:
+            gr.Warning(f"加载表名索引失败: {e}. 模糊搜索将不可用。")
+            _TABLENAME_INDEX, _TABLENAME_MAPPING = None, None
+    return _TABLENAME_INDEX, _TABLENAME_MAPPING
 
 
 def save_config(embed_model_path, top_k, llm_model, api_key, llm_url, sql_type):
@@ -283,10 +408,10 @@ def format_table_details(table_name: str):
     if not table_info: return f"❌ 未找到表: **{table_name}**"
     md = f"## 表名: {table_name}\n**表含义**: {table_info.get('description', '无')}\n\n### 字段信息:\n"
     if table_info.get('fields'):
-        md += "| 字段名 | 字段含义 | 字段格式 | 可否为空 | 默认值 |\n|---|---|---|---|---|\n"
+        md += "| 字段名 | 字段含义 | 字段格式 | 可否为空 | 默认值 |\n|---|---|---|---|---\n"
         md += "\n".join([
-                            f"| {f.get('field_name', '')} | {f.get('field_description', '')} | {f.get('field_type', '')} | {f.get('is_nullable', '')} | {f.get('default_value', '')} |"
-                            for f in table_info['fields']])
+            f"| {f.get('field_name', '')} | {f.get('field_description', '')} | {f.get('field_type', '')} | {f.get('is_nullable', '')} | {f.get('default_value', '')} |"
+            for f in table_info['fields']])
     else:
         md += "无字段信息。\n"
     md += "\n### 关联信息:\n"
@@ -304,7 +429,8 @@ def generate_sql_and_log(question, embed_model_path, top_k, llm_model, api_key, 
         yield "❌ 错误: 所有字段均不能为空.", ""
         return
     command = [sys.executable, os.path.join(SCRIPT_DIR, "rag_query.py"), "--question", question, "--embed_model_path",
-               embed_model_path, "--k", str(int(top_k)), "--key", api_key, "--url", llm_url, "--sql_type", sql_type, "--mode", "sql"]
+               embed_model_path, "--k", str(int(top_k)), "--key", api_key, "--url", llm_url, "--sql_type", sql_type,
+               "--mode", "sql"]
     log_content, sql_content = f"▶️ 执行命令: {' '.join(command)}\n" + "-" * 20 + "\n", "⏳ 等待脚本执行..."
     yield log_content, sql_content
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8',
@@ -332,51 +458,107 @@ def generate_sql_and_log(question, embed_model_path, top_k, llm_model, api_key, 
             sql_content = f"❌ 解析SQL时出错: {e}"
     yield log_content, sql_content
 
-def run_table_search_agent(query, top_k, embed_model_path):
-    """执行表检索智能体"""
-    if not all([query, embed_model_path]):
-        return pd.DataFrame(columns=["相似度", "表名", "表说明"])
 
+def run_table_search_agent(query, top_k, embed_model_path):
+    if not all([query, embed_model_path]): return pd.DataFrame(columns=["相似度", "表名", "表说明"])
     command = [sys.executable, os.path.join(SCRIPT_DIR, "rag_query.py"), "--question", query, "--embed_model_path",
                embed_model_path, "--k", str(int(top_k)), "--mode", "search"]
-    
     try:
-        process = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            check=True,
-            cwd=SCRIPT_DIR
-        )
+        process = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', check=True, cwd=SCRIPT_DIR)
         results = json.loads(process.stdout)
-        if not results:
-            return pd.DataFrame(columns=["相似度", "表名", "表说明"])
-        
+        if not results: return pd.DataFrame(columns=["相似度", "表名", "表说明"])
         output_data = []
         for res in results:
             description = "无"
             for line in res.get("details", "").split('\n'):
-                if line.startswith("表含义:"):
-                    description = line.replace("表含义:", "").strip()
-                    break
-            output_data.append([
-                f"{res.get('similarity_percentage', 0)}%",
-                res.get("table_name", "未知"),
-                description
-            ])
-        
+                if line.startswith("表含义:"): description = line.replace("表含义:", "").strip(); break
+            output_data.append([f"{res.get('similarity_percentage', 0)}%", res.get("table_name", "未知"), description])
         return pd.DataFrame(output_data, columns=["相似度", "表名", "表说明"])
-
     except subprocess.CalledProcessError as e:
-        gr.Warning(f"脚本执行出错:\n```\n{e.stderr}\n```")
+        gr.Warning(f"脚本执行出错:\n```\n{e.stderr}\n```");
         return pd.DataFrame(columns=["相似度", "表名", "表说明"])
     except json.JSONDecodeError:
-        gr.Warning(f"解析脚本JSON输出失败。脚本原始输出:\n```\n{process.stdout}\n```")
-        return pd.DataFrame(columns=["相似度", "表名", "表说明"])
+        gr.Warning(f"解析脚本JSON输出失败。脚本原始输出:\n```\n{process.stdout}\n```");
+        return pd.DataFrame(
+            columns=["相似度", "表名", "表说明"])
     except Exception as e:
-        gr.Warning(f"未知错误: {e}")
+        gr.Warning(f"未知错误: {e}");
         return pd.DataFrame(columns=["相似度", "表名", "表说明"])
+
+
+def search_interface_sql(query, search_mode, top_n, embed_model_path, progress=gr.Progress()):
+    if search_mode == "精确匹配":
+        progress(0.5, desc="正在进行精确搜索...")
+        data = load_extracted_data()
+        if not data: gr.Warning("extracted_data.json 未加载或为空。请先运行数据预处理。"); return None
+        results = [[item.get("req_url"), item.get("db_sql")] for item in data if
+                   query and query in item.get("req_url", "")]
+        if not results: gr.Info("未找到包含查询词的接口。"); return None
+        return pd.DataFrame(results, columns=["接口 (req_url)", "SQL (db_sql)"])
+    elif search_mode == "模糊匹配":
+        progress(0, desc="加载接口索引...")
+        interface_index, interface_mapping = load_interface_search_data()
+        if not interface_index or not interface_mapping: gr.Warning(
+            "接口索引文件未找到。请先运行数据预处理。"); return None
+        progress(0.2, desc="加载嵌入模型...")
+        try:
+            model = SentenceTransformer(embed_model_path, trust_remote_code=True)
+        except Exception as e:
+            gr.Warning(f"加载嵌入模型失败: {e}");
+            return None
+        progress(0.5, desc="编码查询...")
+        query_embedding = model.encode([query], normalize_embeddings=True).astype("float32")
+        progress(0.7, desc="在FAISS中搜索...")
+        distances, indices = interface_index.search(query_embedding, int(top_n))
+        progress(0.9, desc="格式化结果...")
+        output_data = []
+        global _EXTRACTED_DATA
+        for i, idx in enumerate(indices[0]):
+            if idx == -1: continue
+            original_item_id = interface_mapping.get(str(idx))
+            if not original_item_id: continue
+            item = _EXTRACTED_DATA.get(original_item_id)
+            if not item: continue
+            dist = distances[0][i]
+            similarity = max(0, 1 - (dist ** 2) / 2)
+            output_data.append([f"{similarity:.2%}", item.get("req_url"), item.get("db_sql")])
+        return pd.DataFrame(output_data, columns=["相似度", "接口 (req_url)", "SQL (db_sql)"])
+
+
+def search_table_info(query, search_mode, top_n, embed_model_path, progress=gr.Progress()):
+    if search_mode == "精确匹配":
+        progress(0.5, desc="正在进行精确搜索...")
+        all_tables = load_table_data()
+        if not all_tables: gr.Warning("table.json 未加载或为空。请先运行数据预处理。"); return None, ""
+        results = [[name] for name in all_tables if query and query.upper() in name.upper()]
+        if not results: gr.Info("未找到包含查询词的表名。"); return None, ""
+        return pd.DataFrame(results, columns=["表名"]), ""
+    elif search_mode == "模糊匹配":
+        progress(0, desc="加载表名索引...")
+        tablename_index, tablename_mapping = load_tablename_search_data()
+        if not tablename_index or not tablename_mapping: gr.Warning(
+            "表名索引文件未找到。请先运行数据预处理。"); return None, ""
+        progress(0.2, desc="加载嵌入模型...")
+        try:
+            model = SentenceTransformer(embed_model_path, trust_remote_code=True)
+        except Exception as e:
+            gr.Warning(f"加载嵌入模型失败: {e}");
+            return None, ""
+        progress(0.5, desc="编码查询...")
+        query_embedding = model.encode([query], normalize_embeddings=True).astype("float32")
+        progress(0.7, desc="在FAISS中搜索...")
+        distances, indices = tablename_index.search(query_embedding, int(top_n))
+        progress(0.9, desc="格式化结果...")
+        output_data = []
+        for i, idx in enumerate(indices[0]):
+            if idx == -1: continue
+            table_name = tablename_mapping.get(str(idx))
+            if not table_name: continue
+            dist = distances[0][i]
+            similarity = max(0, 1 - (dist ** 2) / 2)
+            output_data.append([f"{similarity:.2%}", table_name])
+        return pd.DataFrame(output_data, columns=["相似度", "表名"]), ""
+
 
 # --- Gradio UI ---
 def create_ui():
@@ -521,28 +703,35 @@ def create_ui():
 
         with gr.Tab("表信息查询"):
             gr.Markdown("## 🔍 表信息查询")
-            gr.Markdown("输入表名，查询其详细结构、含义及关联信息。")
+            gr.Markdown("输入表名或相关描述，查询其详细结构、含义及关联信息。")
             with gr.Row():
-                with gr.Column(scale=1):
-                    table_name_query_input = gr.Textbox(label="输入表名", placeholder="例如: ADS_CODE_MAPPING")
-                    query_table_button = gr.Button("查询表信息")
                 with gr.Column(scale=2):
-                    table_details_output = gr.Markdown(label="表详细信息")
-            query_table_button.click(fn=format_table_details, inputs=[table_name_query_input],
-                                     outputs=[table_details_output])
-            table_name_query_input.submit(fn=format_table_details, inputs=[table_name_query_input],
-                                          outputs=[table_details_output])
+                    table_info_query = gr.Textbox(label="表名或描述查询")
+                    with gr.Row():
+                        table_info_mode = gr.Radio(["精确匹配", "模糊匹配"], label="查询模式", value="精确匹配")
+                        table_info_top_k = gr.Slider(minimum=1, maximum=50, value=10, step=1,
+                                                     label="模糊匹配返回结果数")
+                    table_info_button = gr.Button("查询表信息", variant="primary")
+                with gr.Column(scale=3):
+                    table_info_results_df = gr.DataFrame(headers=["表名"], label="查询结果列表", interactive=True)
+                    table_info_details_md = gr.Markdown(label="表详细信息")
+
+            table_info_button.click(fn=search_table_info, inputs=[table_info_query, table_info_mode, table_info_top_k, preprocess_embed_model_input],
+                                    outputs=[table_info_results_df, table_info_details_md])
+
+            def get_details_on_select(df, evt: gr.SelectData):
+                if evt.value is not None:
+                    selected_table_name = df.iloc[evt.index[0]][-1]  # Get name, works for both modes
+                    return format_table_details(selected_table_name)
+                return "请从上方列表选择一张表以查看详情。"
+
+            table_info_results_df.select(fn=get_details_on_select, inputs=[table_info_results_df],
+                                         outputs=[table_info_details_md])
 
     return demo
 
 
 if __name__ == "__main__":
     ui = create_ui()
-    # Define the directory to be allowed
     pics_dir = os.path.join(SCRIPT_DIR, "pics")
-    # Launch the app with the allowed path
-    ui.launch(
-        server_name="0.0.0.0",
-        server_port=7861,
-        allowed_paths=[pics_dir]
-    )
+    ui.launch(server_name="0.0.0.0", server_port=7861, allowed_paths=[pics_dir])
