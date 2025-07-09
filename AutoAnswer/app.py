@@ -304,7 +304,7 @@ def generate_sql_and_log(question, embed_model_path, top_k, llm_model, api_key, 
         yield "❌ 错误: 所有字段均不能为空.", ""
         return
     command = [sys.executable, os.path.join(SCRIPT_DIR, "rag_query.py"), "--question", question, "--embed_model_path",
-               embed_model_path, "--k", str(int(top_k)), "--key", api_key, "--url", llm_url, "--sql_type", sql_type]
+               embed_model_path, "--k", str(int(top_k)), "--key", api_key, "--url", llm_url, "--sql_type", sql_type, "--mode", "sql"]
     log_content, sql_content = f"▶️ 执行命令: {' '.join(command)}\n" + "-" * 20 + "\n", "⏳ 等待脚本执行..."
     yield log_content, sql_content
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8',
@@ -332,15 +332,59 @@ def generate_sql_and_log(question, embed_model_path, top_k, llm_model, api_key, 
             sql_content = f"❌ 解析SQL时出错: {e}"
     yield log_content, sql_content
 
+def run_table_search_agent(query, top_k, embed_model_path):
+    """执行表检索智能体"""
+    if not all([query, embed_model_path]):
+        return pd.DataFrame(columns=["相似度", "表名", "表说明"])
+
+    command = [sys.executable, os.path.join(SCRIPT_DIR, "rag_query.py"), "--question", query, "--embed_model_path",
+               embed_model_path, "--k", str(int(top_k)), "--mode", "search"]
+    
+    try:
+        process = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            check=True,
+            cwd=SCRIPT_DIR
+        )
+        results = json.loads(process.stdout)
+        if not results:
+            return pd.DataFrame(columns=["相似度", "表名", "表说明"])
+        
+        output_data = []
+        for res in results:
+            description = "无"
+            for line in res.get("details", "").split('\n'):
+                if line.startswith("表含义:"):
+                    description = line.replace("表含义:", "").strip()
+                    break
+            output_data.append([
+                f"{res.get('similarity_percentage', 0)}%",
+                res.get("table_name", "未知"),
+                description
+            ])
+        
+        return pd.DataFrame(output_data, columns=["相似度", "表名", "表说明"])
+
+    except subprocess.CalledProcessError as e:
+        gr.Warning(f"脚本执行出错:\n```\n{e.stderr}\n```")
+        return pd.DataFrame(columns=["相似度", "表名", "表说明"])
+    except json.JSONDecodeError:
+        gr.Warning(f"解析脚本JSON输出失败。脚本原始输出:\n```\n{process.stdout}\n```")
+        return pd.DataFrame(columns=["相似度", "表名", "表说明"])
+    except Exception as e:
+        gr.Warning(f"未知错误: {e}")
+        return pd.DataFrame(columns=["相似度", "表名", "表说明"])
 
 # --- Gradio UI ---
 def create_ui():
     loaded_config = load_config()
     with gr.Blocks(title="RAG SQL Generator", theme=gr.themes.Soft()) as demo:
-        gr.Markdown("## 📝 RAG-based SQL Generator")
-        gr.Markdown("通过输入自然语言问题, 检索相关库表结构, 并由大模型生成相应的 SQL 查询.")
+        gr.Markdown("## 智能SQL与表查询代理")
 
-        with gr.Tab("大模型SQL生成"):
+        with gr.Tab("智能SQL生成"):
             with gr.Row():
                 with gr.Column(scale=3):
                     question_input = gr.Textbox(lines=8, label="用户问题", placeholder=f"例如: '{QUESTION}'")
@@ -348,7 +392,7 @@ def create_ui():
                     log_output = gr.Textbox(lines=10, label="详细日志", interactive=False)
                 with gr.Column(scale=1):
                     gr.Markdown("#### ⚙️ 参数配置")
-                    embed_model_input = gr.Textbox(value=loaded_config.get("EMBED_MODEL", ""), label="嵌入模型路径",
+                    embed_model_input = gr.Textbox(value=loaded_config.get("EMBED_MODEL", DEFAULT_EMBED_MODEL_PATH), label="嵌入模型路径",
                                                    interactive=True, placeholder="例如: BAAI/bge-m3")
                     top_k_input = gr.Slider(minimum=1, maximum=50, value=loaded_config.get("TOP_K", 10), step=1,
                                             label="检索 Top-K")
@@ -369,6 +413,25 @@ def create_ui():
                                   inputs=[question_input, embed_model_input, top_k_input, llm_model_input,
                                           api_key_input, llm_url_input, sql_type_input],
                                   outputs=[log_output, sql_result_output])
+
+        with gr.Tab("智能表查询"):
+            gr.Markdown("## 🤖 智能表查询")
+            gr.Markdown("输入您想查询的数据内容，智能体将为您找到最相关的几张表。")
+            with gr.Row():
+                with gr.Column(scale=2):
+                    table_query_input = gr.Textbox(label="查询内容", placeholder="例如：查询所有客户的风险等级和收益率")
+                    table_top_k_input = gr.Slider(minimum=1, maximum=20, value=5, step=1, label="返回结果数量")
+                    table_search_button = gr.Button("查找相关表", variant="primary")
+                with gr.Column(scale=3):
+                    table_search_output = gr.DataFrame(
+                        headers=["相似度", "表名", "表说明"],
+                        label="查询结果",
+                        interactive=False
+                    )
+            
+            table_search_button.click(fn=run_table_search_agent, 
+                                      inputs=[table_query_input, table_top_k_input, embed_model_input],
+                                      outputs=[table_search_output])
 
         with gr.Tab("数据预处理"):
             gr.Markdown("## ⚙️ 数据预处理与向量化")
@@ -415,12 +478,14 @@ def create_ui():
         with gr.Tab("说明文档"):
             gr.Markdown("""
                 ## 📖 使用说明
-                ### 大模型SQL生成
+                ### 智能SQL生成
                 在此页面，您可以输入自然语言问题，并配置相关参数，调用大模型生成SQL。
+                ### 智能表查询
+                在此页面，您可以输入自然语言问题，智能体将只通过向量检索，为您返回最可能相关的几张表及其信息。
                 ### 数据预处理
-                在此页面，您可以一键完成数据预处理和向量化，为“大模型SQL生成”做数据准备。
+                在此页面，您可以一键完成从原始CSV到FAISS向量索引的完整流程。
                 ### 表信息查询
-                在此页面，您可以查询已处理好的表的详细信息。
+                在此页面，您可以查询已在系统中存在的表的详细信息。
                 """)
     return demo
 
