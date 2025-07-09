@@ -53,8 +53,8 @@ def create_text_chunks_from_json(src_json: dict) -> Tuple[List[str], List[str]]:
 
 # ---------- FAISS 索引构建 ----------
 def build_flat(vecs: np.ndarray) -> faiss.Index:
-    idx = faiss.IndexFlatL2(vecs.shape[1]);
-    idx.add(vecs);
+    idx = faiss.IndexFlatL2(vecs.shape[1])
+    idx.add(vecs)
     return idx
 
 
@@ -62,17 +62,17 @@ def build_hnsw(vecs: np.ndarray, M=32, efC=200, efS=64) -> faiss.Index:
     dim = vecs.shape[1]
     idx = faiss.IndexHNSWFlat(dim, M, faiss.METRIC_L2)
     idx.hnsw.efConstruction, idx.hnsw.efSearch = efC, efS
-    idx.add(vecs);
+    idx.add(vecs)
     return idx
 
 
 def build_ivfpq(vecs: np.ndarray, nlist=4096, M=16, nbits=8) -> faiss.Index:
-    dim = vecs.shape[1];
+    dim = vecs.shape[1]
     quant = faiss.IndexFlatL2(dim)
     idx = faiss.IndexIVFPQ(quant, dim, nlist, M, nbits)
-    idx.train(vecs);
-    idx.nprobe = 16;
-    idx.add(vecs);
+    idx.train(vecs)
+    idx.nprobe = 16
+    idx.add(vecs)
     return idx
 
 
@@ -85,7 +85,7 @@ def main(args):
     # 2. 文本块
     table_names, chunks = create_text_chunks_from_json(table_defs)
     if not chunks:
-        print("❗ 无文本块生成，退出");
+        print("❗ 无文本块生成，退出")
         return
 
     # 3. 加载模型
