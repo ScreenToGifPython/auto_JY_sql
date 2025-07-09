@@ -23,7 +23,7 @@ SQL_TYPE = "mysql"
 TOP_K = 10
 MAX_LEN = 512
 LLM_MODEL = "deepseek-chat"
-API_KEY = "sk-43a58ad2bbd740b095f5f61671ed9fae"
+API_KEY = "sk-xxxxxxxx"
 LLM_URL = "https://api.deepseek.com"
 QUESTION = "公募基金的二级分类基金类型是股票型的最近1年净值和收益率数据,只要交易日的数据,用上海市场交易日?"
 DEFAULT_EMBED_MODEL_PATH = "BAAI/bge-m3"
@@ -61,12 +61,13 @@ def call_llm(prompt: str, api_key: str, base_url: str, sql_type: str, model: str
              temperature: float = 0.1) -> str:
     sys_prompt = f"""
 你是一名资深数据工程师，精通{sql_type}数据库的 SQL 编写。请严格遵循以下原则：
-1. **值映射：** 若字段备注已给中文
-代码映射，请先把用户描述转换为对应代码再过滤。
+1. **值映射：** 若字段备注已给中文代码映射，请先把用户描述转换为对应代码再过滤。
 2. **表选择：** 只选择与需求直接相关的表，避免冗余 JOIN。
 3. **JOIN 条件：** 当确有关系时使用表间关联字段。
 4. **注释：** SQL 加上中文注释解释字段含义、过滤条件及 JOIN 逻辑。
 5. **执行效率：** 你写的 SQL 一定是执行效率最高的SQL代码, 绝对符合{sql_type}数据库的特性,语法,执行效率。
+6. **提问：** 如果你认为用户的问题太模糊,或者你需要更多的信息,请在生成SQL之后加再以注释形式说明。可以要求用户提供更多信息并且 "提高检索Top-K"。说明你需要什么信息。
+6. **解释模拟：** 如果生成SQL的表和字段数据不在提供的表结构中 (是你模拟的), 请在SQL代码块中用注释强调说明。
     """
     if "lightcode-ui" in base_url:
         headers = {'Accept': "*/*", 'Authorization': f"Bearer {api_key}", 'Content-Type': "application/json"}
@@ -98,9 +99,11 @@ def build_prompt(user_q: str, sql_type: str, ctx_blocks: List[str]) -> str:
 --- 用户需求 ---
 {user_q}
 
-请在 ```sql ``` 块中给出最终符合{sql_type}语法的 SQL, 要有详细的字段注释,关联注释,以及条件注释。
+请在 ```sql ``` 块中给出最终符合{sql_type}语法的 SQL, 要有详细的字段注释,关联注释,表含义数组, 以及条件注释。
 并在代码块中用注释解释所用表、字段、JOIN 逻辑。对于你不知道的字段值映射关系,你要进行说明。
 请勿返回其他内容，只返回 ```sql ``` 块。请注意SQL的执行效率,写出最佳性能的sql代码。
+如果需求过于模糊, 在返回SQL后用注释说明你需要什么信息。 如果你需要更多的表结构, 在返回SQL后用注释告诉用户 '提高检索Top-K'。
+如果生成SQL的表和字段数据不在提供的表结构中 (是你模拟的), 请在SQL代码块中用注释强调说明。
     """
 
 
