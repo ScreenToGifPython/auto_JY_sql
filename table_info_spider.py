@@ -117,11 +117,10 @@ def get_locator_from_ai(html_source, element_description, api_key, base_url, mod
 
     locator = call_llm(
         prompt=user_prompt,
-        system_prompt=system_prompt,
+        sys_prompt=system_prompt,
         api_key=api_key,
         base_url=base_url,
-        model_name=model_name,
-        json_output=True
+        model=model_name
     )
 
     if isinstance(locator, dict) and 'by' in locator and 'value' in locator:
@@ -271,10 +270,10 @@ def simplify_comment_with_llm(comment_text, api_key, base_url, model_name):
 
     simplified_text = call_llm(
         prompt=user_prompt,
-        system_prompt=system_prompt,
+        sys_prompt=system_prompt,
         api_key=api_key,
         base_url=base_url,
-        model_name=model_name,
+        model=model_name,
         temperature=0.1
     )
 

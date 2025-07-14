@@ -106,10 +106,10 @@ def generate_sql_with_llm(prompt, api_key, base_url, llm_model):
 
     sql_code = call_llm(
         prompt=prompt,
-        system_prompt=system_prompt,
+        sys_prompt=system_prompt,
         api_key=api_key,
         base_url=base_url,
-        model_name=llm_model,
+        model=llm_model,
         temperature=0.1
     )
     return sql_code
