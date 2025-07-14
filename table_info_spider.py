@@ -131,41 +131,60 @@ def get_locator_from_ai(html_source, element_description, api_key, base_url, mod
 
 
 def scrape_table_details(driver):
-    """从表详情页HTML中抓取所有信息(v14.4 终极修正提取与格式)"""
+    """从表详情页HTML中抓取所有信息(v15.0 修正选择器)"""
     print("🔎 正在使用Selenium直接提取页面元素...")
     scraped_data = {"basic_info": {}, "columns_data": [], "notes_map": {}}
 
-    # --- 终极修正 1: 使用更精确的XPath提取基本信息 ---
-    # 尝试提取“表中文名”及其他基本信息
     try:
         soup = BeautifulSoup(driver.page_source, 'html.parser')
-        # 查找包含中文表名的span标签
-        chinese_name_span = soup.find('span', {'ng-bind-html': re.compile(r'table\\.tableChiName')})
-        if chinese_name_span:
-            scraped_data["basic_info"]["tableChiName"] = chinese_name_span.get_text(strip=True)
-        else:
-            print("⚠️ 未能提取到'表中文名'。")
 
-        # 提取 description
-        description_span = soup.find('span', {'ng-bind-html': re.compile(r'table\\.description')})
-        if description_span:
-            scraped_data["basic_info"]["description"] = description_span.get_text(strip=True)
+        # --- 修正: 使用更稳定的选择器提取基本信息 ---
+        
+        # 提取中文表名
+        title_h3 = soup.find('h3', id='table-name-title')
+        if title_h3:
+            chinese_name_span = title_h3.find('span', {'ng-bind-html': re.compile(r'table\.tableChiName')})
+            if chinese_name_span:
+                scraped_data["basic_info"]["tableChiName"] = chinese_name_span.get_text(strip=True)
+            else:
+                print("⚠️ 未能提取到'表中文名'。")
         else:
-            print("⚠️ 未能提取到'description'。")
+            print("⚠️ 未能找到 H3 标题元素 'table-name-title'。")
 
-        # 提取 tableUpdateTime
-        table_update_time_span = soup.find('span', {'ng-bind': 'table.tableUpdateTime'})
-        if table_update_time_span:
-            scraped_data["basic_info"]["tableUpdateTime"] = table_update_time_span.get_text(strip=True)
-        else:
-            print("⚠️ 未能提取到'tableUpdateTime'。")
+        # 提取 description, tableUpdateTime, key from div#tableHeadInfo
+        head_info_div = soup.find('div', id='tableHeadInfo')
+        if head_info_div:
+            # 提取 description
+            desc_span = head_info_div.find('span', {'ng-bind-html': re.compile(r'table\.description')})
+            if desc_span:
+                scraped_data["basic_info"]["description"] = desc_span.get_text(strip=True).replace('\n', ' ')
+            else:
+                print("⚠️ 未能提取到'description'。")
 
-        # 提取 key (业务唯一性)
-        key_span = soup.find('span', {'ng-bind': "index.columnName || '无'"})
-        if key_span:
-            scraped_data["basic_info"]["key"] = key_span.get_text(strip=True)
+            # 提取 tableUpdateTime
+            update_time_span = head_info_div.find('span', {'ng-bind': 'table.tableUpdateTime'})
+            if update_time_span:
+                scraped_data["basic_info"]["tableUpdateTime"] = update_time_span.get_text(strip=True)
+            else:
+                print("⚠️ 未能提取到'tableUpdateTime'。")
+
+            # 提取 key (业务唯一性)
+            key_span_parent = head_info_div.find('span', text=re.compile(r'业务唯一性：'))
+            if key_span_parent:
+                key_value_span = key_span_parent.find_next_sibling('span')
+                if key_value_span:
+                    scraped_data["basic_info"]["key"] = key_value_span.get_text(strip=True)
+                else:
+                    print("⚠️ 未能提取到'key' (value span)。")
+            else:
+                # Fallback for key
+                key_span_fallback = head_info_div.find('span', {'ng-bind': "index.columnName || '无'"})
+                if key_span_fallback:
+                    scraped_data["basic_info"]["key"] = key_span_fallback.get_text(strip=True)
+                else:
+                    print("⚠️ 未能提取到'key' (text or fallback)。")
         else:
-            print("⚠️ 未能提取到'key'。")
+            print("⚠️ 未能找到 DIV 元素 'tableHeadInfo'。")
 
     except Exception as e:
         print(traceback.format_exc())
