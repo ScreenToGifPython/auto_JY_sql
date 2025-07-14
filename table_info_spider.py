@@ -9,7 +9,6 @@
 import json
 import traceback
 import os
-import httpx
 import re
 import subprocess
 import sys
@@ -21,11 +20,11 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
-from openai import OpenAI
 from bs4 import BeautifulSoup
 from bs4.element import Comment
 import time
 import random
+from llm_utils import call_llm
 
 
 # --- 记忆/缓存/数据库 功能 ---
@@ -103,42 +102,32 @@ def get_locator_from_ai(html_source, element_description, api_key, base_url, mod
         print(f"❌ 精简后的HTML仍然过长 ({len(simplified_html)} chars)，跳过API调用。")
         return None
 
-    print("🤖 正式调用大模型API进行分析...")
-    try:
-        http_client = httpx.Client(verify=False)
-        client = OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
-        system_prompt = (
-            "You are an expert web automation assistant. Your task is to analyze HTML source code "
-            "and return a single, precise, and robust Selenium locator for a requested element. "
-            "You must return the result as a JSON object with two keys: 'by' and 'value'. "
-            "The 'by' key must be one of the following strings: 'ID', 'NAME', 'CLASS_NAME', 'TAG_NAME', 'LINK_TEXT', 'PARTIAL_LINK_TEXT', 'CSS_SELECTOR', 'XPATH'. "
-            "The 'value' key is the corresponding locator string."
-        )
-        user_prompt = (
-            f"Based on the following HTML, find the locator for the '{element_description}'.\n\n"
-            f"HTML:\n```html\n{simplified_html}\n```\n\n"
-            "Return only the JSON object."
-        )
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            stream=False
-        )
-        response_text = response.choices[0].message.content
-        print(f"🤖 大模型返回原始结果: {response_text}")
-        json_part = response_text[response_text.find('{'):response_text.rfind('}') + 1]
-        locator = json.loads(json_part)
-        if isinstance(locator, dict) and 'by' in locator and 'value' in locator:
-            return locator
-        else:
-            print("❌ 大模型返回的JSON格式不正确。")
-            return None
-    except Exception as e:
-        print(f"❌ 调用大模型API时发生错误: {e}")
-        print(traceback.format_exc())
+    system_prompt = (
+        "You are an expert web automation assistant. Your task is to analyze HTML source code "
+        "and return a single, precise, and robust Selenium locator for a requested element. "
+        "You must return the result as a JSON object with two keys: 'by' and 'value'. "
+        "The 'by' key must be one of the following strings: 'ID', 'NAME', 'CLASS_NAME', 'TAG_NAME', 'LINK_TEXT', 'PARTIAL_LINK_TEXT', 'CSS_SELECTOR', 'XPATH'. "
+        "The 'value' key is the corresponding locator string."
+    )
+    user_prompt = (
+        f"Based on the following HTML, find the locator for the '{element_description}'.\n\n"
+        f"HTML:\n```html\n{simplified_html}\n```\n\n"
+        "Return only the JSON object."
+    )
+
+    locator = call_llm(
+        prompt=user_prompt,
+        system_prompt=system_prompt,
+        api_key=api_key,
+        base_url=base_url,
+        model_name=model_name,
+        json_output=True
+    )
+
+    if isinstance(locator, dict) and 'by' in locator and 'value' in locator:
+        return locator
+    else:
+        print("❌ 大模型返回的JSON格式不正确或解析失败。")
         return None
 
 
@@ -152,14 +141,14 @@ def scrape_table_details(driver):
     try:
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         # 查找包含中文表名的span标签
-        chinese_name_span = soup.find('span', {'ng-bind-html': re.compile(r'table\.tableChiName')})
+        chinese_name_span = soup.find('span', {'ng-bind-html': re.compile(r'table\\.tableChiName')})
         if chinese_name_span:
             scraped_data["basic_info"]["tableChiName"] = chinese_name_span.get_text(strip=True)
         else:
             print("⚠️ 未能提取到'表中文名'。")
 
         # 提取 description
-        description_span = soup.find('span', {'ng-bind-html': re.compile(r'table\.description')})
+        description_span = soup.find('span', {'ng-bind-html': re.compile(r'table\\.description')})
         if description_span:
             scraped_data["basic_info"]["description"] = description_span.get_text(strip=True)
         else:
@@ -253,7 +242,6 @@ def scrape_table_details(driver):
 
 
 def simplify_comment_with_llm(comment_text, api_key, base_url, model_name):
-    print(comment_text)
     """
     使用大模型简化单个备注信息，根据内容选择不同的提示词，并优先使用正则表达式提取值映射。
     """
@@ -271,35 +259,30 @@ def simplify_comment_with_llm(comment_text, api_key, base_url, model_name):
             print(f"✅ 正则表达式提取到值映射: '{extracted_values[:50]}...' ")
             return extracted_values
 
-    # Fallback to LLM if regex doesn't apply or doesn't find anything
-    try:
-        http_client = httpx.Client(verify=False)
-        client = OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
+    # Fallback to LLM
+    system_prompt = (
+        "你是一个专业的数据库文档助手。你的任务是简化数据库字段的备注信息。"
+        "你会收到一个备注文本。"
+        "请用最简洁的语言总结其核心含义、与其他表的关联或关键业务逻辑，去除冗余的解释性文字。"
+        "如果备注已经非常简洁，请直接返回原始备注。"
+        "只返回简化后的文本，不要添加任何额外说明。"
+    )
+    user_prompt = f"请简化以下备注：\n\n{comment_text}"
 
-        system_prompt = (
-            "你是一个专业的数据库文档助手。你的任务是简化数据库字段的备注信息。"
-            "你会收到一个备注文本。"
-            "请用最简洁的语言总结其核心含义、与其他表的关联或关键业务逻辑，去除冗余的解释性文字。"
-            "如果备注已经非常简洁，请直接返回原始备注。"
-            "只返回简化后的文本，不要添加任何额外说明。"
-        )
-        user_prompt = f"请简化以下备注：\n\n{comment_text}"
+    simplified_text = call_llm(
+        prompt=user_prompt,
+        system_prompt=system_prompt,
+        api_key=api_key,
+        base_url=base_url,
+        model_name=model_name,
+        temperature=0.1
+    )
 
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.1,  # 较低的温度以获得更确定的结果
-            stream=False
-        )
-        simplified_text = response.choices[0].message.content.strip()
+    if simplified_text:
         print(f"✅ 大模型简化完成: '{simplified_text[:50]}...' ")
         return simplified_text
-    except Exception as e:
-        print(f"❌ 调用大模型简化备注时发生错误: {e}")
-        print(traceback.format_exc())
+    else:
+        print("❌ 调用大模型简化备注时发生错误，返回原始备注。")
         return comment_text  # 失败时返回原始备注
 
 

@@ -8,7 +8,7 @@
 import faiss, json, os, numpy as np
 import argparse
 from sentence_transformers import SentenceTransformer
-from openai import OpenAI  # 也可换成 deepseek 等
+from llm_utils import call_llm
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -96,23 +96,23 @@ def build_full_prompt(query, table_definitions, db_dialect):
     return prompt.strip()
 
 
-def call_llm(prompt, api_key, base_url, llm_model):
-    client = OpenAI(api_key=api_key, base_url=base_url)
-    print("🤖 正式调用大模型API进行SQL生成 ...")
-    resp = client.chat.completions.create(
-        model=llm_model,
-        messages=[
-            {"role": "system", "content": """
+def generate_sql_with_llm(prompt, api_key, base_url, llm_model):
+    system_prompt = """
 你是一名资深数据工程师，精通 SQL 编写。请严格遵循以下原则：
 1.  **数据类型和值映射：** 如果字段备注中提到与 `CT_SystemConst` 表关联，或明确给出值到描述的映射（例如：`7-指数型, 8-优化指数型, 16-非指数型`），请务必将用户查询中的中文描述转换为对应的数字代码或英文缩写进行过滤。例如，如果用户查询“QDII类型”，而备注中说明 `InvestmentType` 字段 `7-QDII`，则应使用 `InvestmentType = 7`。
 2.  **表选择：** 优先选择包含用户所需信息的表。对于日期相关的查询（如清盘日期），请优先考虑 `MF_FundArchives` 表中的 `ExpireDate` 或 `LastOperationDate` 字段，而不是 `MF_Transformation` 等不包含此类信息的表。
 3.  **JOIN 条件：** 必要时请合理 JOIN，JOIN 条件优先使用主键/外键 InnerCode 等。
-4.  **仔细遵循用户在 ### 要求 部分提供的所有格式化和内容指令。"""},
-            {"role": "user", "content": prompt}
-        ],
+4.  **仔细遵循用户在 ### 要求 部分提供的所有格式化和内容指令。"""
+
+    sql_code = call_llm(
+        prompt=prompt,
+        system_prompt=system_prompt,
+        api_key=api_key,
+        base_url=base_url,
+        model_name=llm_model,
         temperature=0.1
     )
-    return resp.choices[0].message.content.strip()
+    return sql_code
 
 
 def main(args):
@@ -135,7 +135,7 @@ def main(args):
     else:
         raise ValueError("无效的模式，请选择 'RAG' 或 'FULL'")
 
-    sql = call_llm(prompt, args.api_key, args.base_url, args.model_name)
+    sql = generate_sql_with_llm(prompt, args.api_key, args.base_url, args.model_name)
     print("\n=== 生成的 SQL ===\n", sql)
 
 
